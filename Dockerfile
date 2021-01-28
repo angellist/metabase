@@ -3,7 +3,7 @@
 ###################
 
 # Build currently doesn't work on > Java 11 (i18n utils are busted) so build on 8 until we fix this
-FROM adoptopenjdk/openjdk8:alpine as builder
+FROM adoptopenjdk/openjdk8:nightly as builder
 
 WORKDIR /app/source
 
@@ -19,7 +19,11 @@ ENV LC_CTYPE en_US.UTF-8
 # gettext: translations
 # java-cacerts: installs updated cacerts to /etc/ssl/certs/java/cacerts
 
-RUN apk add --no-cache coreutils bash yarn git wget curl make gettext java-cacerts
+RUN apt-get update -yq && apt-get install -yq git wget curl make gettext ca-certificates-java
+
+RUN curl -sL https://deb.nodesource.com/setup_15.x | bash - \
+      && apt-get install -y nodejs \
+      && npm install -g yarn
 
 # lein:    backend dependencies and building
 ADD https://raw.github.com/technomancy/leiningen/stable/bin/lein /usr/local/bin/lein
@@ -58,7 +62,7 @@ RUN keytool -noprompt -import -trustcacerts -alias aws-rds \
 # # STAGE 2: runner
 # ###################
 
-FROM adoptopenjdk/openjdk11:alpine-jre as runner
+FROM adoptopenjdk/openjdk11:jre-nightly as runner
 
 WORKDIR /app
 
@@ -66,7 +70,7 @@ ENV FC_LANG en-US
 ENV LC_CTYPE en_US.UTF-8
 
 # dependencies
-RUN apk add --no-cache bash ttf-dejavu fontconfig
+RUN apt-get update -yq && apt-get install -yq ttf-dejavu fontconfig
 
 # add fixed cacerts
 COPY --from=builder /etc/ssl/certs/java/cacerts /opt/java/openjdk/lib/security/cacerts
