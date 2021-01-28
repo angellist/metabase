@@ -10,3 +10,5 @@ target/*
 
 .dockerignore
 Dockerfile
+
+.buildkite
