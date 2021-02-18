@@ -4,7 +4,9 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [java-time :as t]
+            [medley.core :as m]
             [metabase.driver :as driver]
+            [metabase.query-processor :as qp]
             [metabase.query-processor-test :as qp.test]
             [metabase.sync :as sync]
             [metabase.test :as mt]
@@ -84,6 +86,37 @@
                   :fields      [[:expression :x]]
                   :limit       3
                   :order-by    [[:asc $id]]})))))))
+
+(deftest dont-return-expressions-if-fields-is-explicit-test
+  (mt/test-drivers (mt/normal-drivers-with-feature :expressions)
+    (let [query (mt/mbql-query venues
+                  {:expressions {"Price + 1" [:+ $price 1]
+                                 "1 + 1"     [:+ 1 1]}
+                   :fields      [$price [:expression "1 + 1"]]
+                   :order-by    [[:asc $id]]
+                   :limit       3})]
+      (testing "If an explicit `:fields` clause is present, expressions *not* in that clause should not come back"
+        (is (= [[3 2] [2 2] [2 2]]
+               (mt/formatted-rows [int int]
+                 (qp/process-query query)))))
+
+      (testing "If `:fields` is not explicit, then return all the expressions"
+        (is (= [[1 "Red Medicine"           4 10.0646 -165.374 3 4 2]
+                [2 "Stout Burgers & Beers" 11 34.0996 -118.329 2 3 2]
+                [3 "The Apple Pan"         11 34.0406 -118.428 2 3 2]]
+               (mt/formatted-rows [int str int 4.0 4.0 int int int]
+                 (qp/process-query (m/dissoc-in query [:query :fields]))))))
+
+      (testing "When aggregating, expressions that aren't used shouldn't come back"
+        (is (= [[2 22] [3 59] [4 13]]
+               (mt/formatted-rows [int int]
+                 (mt/run-mbql-query venues
+                   {:expressions {"Price + 1" [:+ $price 1]
+                                  "1 + 1"     [:+ 1 1]}
+                    :aggregation [:count]
+                    :breakout    [[:expression "Price + 1"]]
+                    :order-by    [[:asc [:expression "Price + 1"]]]
+                    :limit       3}))))))))
 
 (deftest expressions-in-order-by-test
   (mt/test-drivers (mt/normal-drivers-with-feature :expressions)
@@ -297,23 +330,21 @@
                   (mt/formatted-rows [int])
                   ffirst))))))
 
-;; Test for https://github.com/metabase/metabase/issues/12305
 (deftest expression-with-slashes
   (mt/test-drivers (mt/normal-drivers-with-feature :expressions)
-    (is (= [[1 "Red Medicine"           4 10.0646 -165.374 3 4.0]
-            [2 "Stout Burgers & Beers" 11 34.0996 -118.329 2 3.0]
-            [3 "The Apple Pan"         11 34.0406 -118.428 2 3.0]]
-           (mt/formatted-rows [int str int 4.0 4.0 int float]
-             (mt/run-mbql-query venues
-               {:expressions {:TEST/my-cool-new-field [:+ $price 1]}
-                :limit       3
-                :order-by    [[:asc $id]]})))
-        "Make sure an expression with a / in its name works")))
+    (testing "Make sure an expression with a / in its name works (#12305)"
+      (is (= [[1 "Red Medicine"           4 10.0646 -165.374 3 4.0]
+              [2 "Stout Burgers & Beers" 11 34.0996 -118.329 2 3.0]
+              [3 "The Apple Pan"         11 34.0406 -118.428 2 3.0]]
+             (mt/formatted-rows [int str int 4.0 4.0 int float]
+               (mt/run-mbql-query venues
+                 {:expressions {:TEST/my-cool-new-field [:+ $price 1]}
+                  :limit       3
+                  :order-by    [[:asc $id]]})))))))
 
-;; https://github.com/metabase/metabase/issues/12762
 (deftest expression-using-aggregation-test
   (mt/test-drivers (mt/normal-drivers-with-feature :expressions)
-    (testing "Can we use aggregations from previous steps in expressions"
+    (testing "Can we use aggregations from previous steps in expressions (#12762)"
       (is (= [["20th Century Cafe" 2 2 0]
               [ "25°" 2 2 0 ]
               ["33 Taps" 2 2 0]]
@@ -326,3 +357,21 @@
                   :expressions  {:price-range [:- [:field-literal "max" :type/Number]
                                                [:field-literal "min" :type/Number]]}
                   :limit        3})))))))
+
+(deftest fk-field-and-duplicate-names-test
+  ;; Redshift hangs on sample-dataset -- See #14784
+  (mt/test-drivers (disj (mt/normal-drivers-with-feature :expressions :foreign-keys) :redshift)
+    (testing "Expressions with `fk->` fields and duplicate names should work correctly (#14854)"
+      (mt/dataset sample-dataset
+        (let [results (mt/run-mbql-query orders
+                        {:expressions {"CE" [:case
+                                             [[[:> $discount 0] $created_at]]
+                                             {:default $product_id->products.created_at}]}
+                         :order-by    [[:asc $id]]
+                         :limit       2})]
+          (is (= ["ID" "User ID" "Product ID" "Subtotal" "Tax" "Total" "Discount" "Created At" "Quantity" "CE"]
+                 (map :display_name (mt/cols results))))
+          (is (= [[1 1  14  37.7  2.1  39.7 nil "2019-02-11T21:40:27.892Z" 2 "2017-12-31T14:41:56.87Z"]
+                  [2 1 123 110.9  6.1 117.0 nil "2018-05-15T08:04:04.58Z"  3 "2017-11-16T13:53:14.232Z"]]
+                 (mt/formatted-rows [int int int 1.0 1.0 1.0 identity str int str]
+                   results))))))))

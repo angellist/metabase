@@ -218,7 +218,7 @@
                                        [nil []])]
     (assoc field
       :default_dimension_option default-option
-      :dimension_options all-options)))
+      :dimension_options        all-options)))
 
 (defn- assoc-dimension-options [resp driver]
   (-> resp
@@ -276,7 +276,8 @@
           (update :base_type keyword)
           (assoc
            :table_id     (str "card__" card-id)
-           :id           [:field-literal (:name col) (or (:base_type col) :type/*)]
+           :id           (or (:id col)
+                             [:field-literal (:name col) (or (:base_type col) :type/*)])
            ;; Assoc special_type at least temprorarily. We need the correct special type in place to make decisions
            ;; about what kind of dimension options should be added. PK/FK values will be removed after we've added
            ;; the dimension options

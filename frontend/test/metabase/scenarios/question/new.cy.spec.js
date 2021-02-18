@@ -141,7 +141,7 @@ describe("scenarios > question > new", () => {
       cy.findByText("Fantastic Wool Shirt"); // order ID#3 with the same quantity
     });
 
-    it.skip("should display date granularity on Summarize when opened from saved question (metabase#11439)", () => {
+    it("should display date granularity on Summarize when opened from saved question (metabase#11439)", () => {
       // save "Orders" as question
       cy.request("POST", "/api/card", {
         name: "11439",
@@ -233,7 +233,7 @@ describe("scenarios > question > new", () => {
         cy.findByText("Done").click();
       });
       cy.findByText("Visualize").click();
-      cy.findByText("604.96");
+      cy.findByText("318.7");
     });
 
     it.skip("should keep manually entered parenthesis intact (metabase#13306)", () => {

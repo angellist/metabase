@@ -6,6 +6,7 @@ import {
   _typeUsingPlaceholder,
   signInAsAdmin,
   openOrdersTable,
+  visitQuestionAdhoc,
 } from "__support__/cypress";
 
 import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
@@ -20,58 +21,10 @@ const customFormulas = [
   { customFormula: "[Quantity] * [Product.Price]", columnName: "Sum Total" },
 ];
 
-function firstCell(contain_assertion, value) {
-  cy.get(".TableInteractive-cellWrapper")
-    .not(".TableInteractive-headerCellData")
-    .first()
-    .should(contain_assertion, value);
-}
-
 describe("scenarios > question > custom columns", () => {
   beforeEach(() => {
     restore();
     signInAsNormalUser();
-  });
-
-  it.skip("cc should only apply to correct column (metabase#12649)", () => {
-    // Create custom question
-    cy.visit("/question/new");
-    cy.findByText("Custom question").click();
-    cy.findByText("Sample Dataset").click();
-    cy.findByText("Orders").click();
-    cy.get(".Icon-join_left_outer").click();
-    cy.findByText("Products").click();
-    cy.findByText("Visualize").click();
-
-    cy.wait(1000)
-      .findByText("where")
-      .should("not.exist");
-    cy.findByText("Orders + Products");
-    cy.findByText("Product → ID");
-    firstCell("contain", 1);
-    firstCell("not.contain", 14);
-
-    // Add custom column formula
-    cy.get(".Icon-notebook").click();
-    cy.findByText("Custom column").click();
-    popover().within($popover => {
-      cy.get("p")
-        .first()
-        .click();
-      cy.get("[contenteditable='true']")
-        .type("1 + 1")
-        .click();
-      cy.get("input")
-        .last()
-        .type("X");
-      cy.findByText("Done").click();
-    });
-    cy.findByText("Visualize").click();
-
-    cy.findByText("Visualize").should("not.exist");
-    cy.findByText("Product → ID");
-    firstCell("contain", 1);
-    firstCell("not.contain", 14);
   });
 
   it("can create a custom column (metabase#13241)", () => {
@@ -216,7 +169,7 @@ describe("scenarios > question > custom columns", () => {
     cy.findByText("There was a problem with your question").should("not.exist");
   });
 
-  it.skip("should not return same results for columns with the same name (metabase#12649)", () => {
+  it("should not return same results for columns with the same name (metabase#12649)", () => {
     openOrdersTable({ mode: "notebook" });
     // join with Products
     cy.findByText("Join data").click();
@@ -432,5 +385,106 @@ describe("scenarios > question > custom columns", () => {
       cy.findByText(CC_NAME);
       cy.findByText("Gizmo2");
     });
+  });
+
+  it.skip("should drop custom column (based on a joined field) when a join is removed (metabase#14775)", () => {
+    const CE_NAME = "Rounded price";
+
+    cy.request("POST", "/api/card", {
+      name: "14775",
+      dataset_query: {
+        database: 1,
+        query: {
+          "source-table": ORDERS_ID,
+          joins: [
+            {
+              fields: "all",
+              "source-table": PRODUCTS_ID,
+              condition: [
+                "=",
+                ["field-id", ORDERS.PRODUCT_ID],
+                ["joined-field", "Products", ["field-id", PRODUCTS.ID]],
+              ],
+              alias: "Products",
+            },
+          ],
+          expressions: {
+            [CE_NAME]: [
+              "ceil",
+              ["joined-field", "Products", ["field-id", PRODUCTS.PRICE]],
+            ],
+          },
+        },
+        type: "query",
+      },
+      display: "table",
+      visualization_settings: {},
+    }).then(({ body: { id: QUESTION_ID } }) => {
+      cy.server();
+      cy.route("POST", "/api/dataset").as("dataset");
+
+      cy.visit(`/question/${QUESTION_ID}/notebook`);
+    });
+
+    // Remove join
+    cy.findByText("Join data")
+      .parent()
+      .find(".Icon-close")
+      .click({ force: true }); // x is hidden and hover doesn't work so we have to force it
+    cy.findByText("Join data").should("not.exist");
+
+    cy.log("**Reported failing on 0.38.1-SNAPSHOT (6d77f099)**");
+    cy.get("[class*=NotebookCellItem]")
+      .contains(CE_NAME)
+      .should("not.exist");
+    cy.findByText("Visualize").click();
+
+    cy.wait("@dataset").then(xhr => {
+      expect(xhr.response.body.error).to.not.exist;
+    });
+    cy.contains("37.65");
+  });
+
+  it("should handle using `case()` when referencing the same column names (metabase#14854)", () => {
+    const CC_NAME = "CE with case";
+
+    cy.server();
+    cy.route("POST", "/api/dataset").as("dataset");
+
+    visitQuestionAdhoc({
+      dataset_query: {
+        type: "query",
+        query: {
+          "source-table": ORDERS_ID,
+          expressions: {
+            [CC_NAME]: [
+              "case",
+              [
+                [
+                  [">", ["field-id", ORDERS.DISCOUNT], 0],
+                  ["field-id", ORDERS.CREATED_AT],
+                ],
+              ],
+              {
+                default: [
+                  "fk->",
+                  ["field-id", ORDERS.PRODUCT_ID],
+                  ["field-id", PRODUCTS.CREATED_AT],
+                ],
+              },
+            ],
+          },
+        },
+        database: 1,
+      },
+      display: "table",
+    });
+
+    cy.wait("@dataset").should(xhr => {
+      expect(xhr.response.body.error).not.to.exist;
+    });
+
+    cy.findByText(CC_NAME);
+    cy.contains("37.65");
   });
 });

@@ -4,11 +4,14 @@
   this one. Event-based DBs such as Druid are tested in `metabase.driver.event-query-processor-test`."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [clojure.test :refer :all]
             [medley.core :as m]
             [metabase.driver :as driver]
             [metabase.driver.util :as driver.u]
             [metabase.models.field :refer [Field]]
+            [metabase.models.table :refer [Table]]
             [metabase.query-processor :as qp]
+            [metabase.query-processor.middleware.add-implicit-joins :as joins]
             [metabase.test.data :as data]
             [metabase.test.data.env :as tx.env]
             [metabase.test.data.interface :as tx]
@@ -163,8 +166,10 @@
         dest-col   (col dest-table-kw dest-field-kw)]
     (-> dest-col
         (update :display_name (partial format "%s → %s" (str/replace (:display_name source-col) #"(?i)\sid$" "")))
-        (assoc :field_ref   [:fk-> [:field-id (:id source-col)] [:field-id (:id dest-col)]]
-               :fk_field_id (:id source-col)))))
+        (assoc :field_ref    [:fk-> [:field-id (:id source-col)] [:field-id (:id dest-col)]]
+               :fk_field_id  (:id source-col)
+               :source_alias (#'joins/join-alias (db/select-one-field :name Table :id (data/id dest-table-kw))
+                                                 (:name source-col))))))
 
 (declare cols)
 
@@ -365,3 +370,37 @@
   [driver]
   ;; TIMEZONE FIXME — remove this and fix the drivers
   (contains? #{:snowflake :oracle :redshift} driver))
+
+(defn nest-query
+  "Nest an MBQL/native query by `n-levels`. Useful for testing how nested queries behave."
+  [outer-query n-levels]
+  (if-not (pos? n-levels)
+    outer-query
+    (let [nested (case (:type outer-query)
+                   :native
+                   (-> outer-query
+                       (dissoc :native :type)
+                       (assoc :type :query
+                              :query {:source-query (set/rename-keys (:native outer-query) {:query :native})}))
+
+                   :query
+                   (assoc outer-query :query {:source-query (:query outer-query)}))]
+      (recur nested (dec n-levels)))))
+
+(deftest nest-query-test
+  (testing "MBQL"
+    (is (= {:database 1, :type :query, :query {:source-table 2}}
+           {:database 1, :type :query, :query {:source-table 2}}))
+    (is (= {:database 1, :type :query, :query {:source-query {:source-table 2}}}
+           (nest-query {:database 1, :type :query, :query {:source-table 2}} 1)))
+    (is (= {:database 1, :type :query, :query {:source-query {:source-query {:source-table 2}}}}
+           (nest-query {:database 1, :type :query, :query {:source-table 2}} 2)))
+    (is (= {:database 1, :type :query, :query {:source-query {:source-query {:source-table 2}}}}
+           (nest-query {:database 1, :type :query, :query {:source-query {:source-table 2}}} 1))))
+  (testing "native"
+    (is (= {:database 1, :type :native, :native {:query "wow"}}
+           (nest-query {:database 1, :type :native, :native {:query "wow"}} 0)))
+    (is (= {:database 1, :type :query, :query {:source-query {:native "wow"}}}
+           (nest-query {:database 1, :type :native, :native {:query "wow"}} 1)))
+    (is (= {:database 1, :type :query, :query {:source-query {:source-query {:native "wow"}}}}
+           (nest-query {:database 1, :type :native, :native {:query "wow"}} 2)))))

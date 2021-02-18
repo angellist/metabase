@@ -3,8 +3,10 @@ import { t, jt } from "ttag";
 import cx from "classnames";
 import _ from "underscore";
 import { getIn, updateIn } from "icepick";
-import { Grid, Collection, ScrollSync } from "react-virtualized";
+import { Grid, Collection, ScrollSync, AutoSizer } from "react-virtualized";
 
+import { color, lighten } from "metabase/lib/colors";
+import "metabase/visualizations/components/TableInteractive.css";
 import { getScrollBarSize } from "metabase/lib/dom";
 
 import Ellipsified from "metabase/components/Ellipsified";
@@ -13,6 +15,8 @@ import { isDimension } from "metabase/lib/schema_metadata";
 import {
   COLLAPSED_ROWS_SETTING,
   COLUMN_SPLIT_SETTING,
+  COLUMN_SORT_ORDER,
+  COLUMN_SHOW_TOTALS,
   isPivotGroupColumn,
   multiLevelPivot,
 } from "metabase/lib/data_grid";
@@ -21,6 +25,9 @@ import { columnSettings } from "metabase/visualizations/lib/settings/column";
 
 import type { VisualizationProps } from "metabase-types/types/Visualization";
 import { findDOMNode } from "react-dom";
+
+const PIVOT_BG_LIGHT = lighten(color("brand"), 0.65);
+const PIVOT_BG_DARK = lighten(color("brand"), 0.6);
 
 const partitions = [
   {
@@ -123,12 +130,7 @@ export default class PivotTable extends Component {
       getProps: ([{ data }], settings) => ({
         partitions,
         columns: data == null ? [] : data.cols,
-        onChangeTotalsVisibility(column, visibility) {
-          console.log("Change totals visibility", column, visibility); // TODO
-        },
-        onChangeSortOrder(column, direction) {
-          console.log("Change sort order", column, direction); // TODO
-        },
+        settings,
       }),
       getValue: ([{ data, card }], settings = {}) => {
         const storedValue = settings[COLUMN_SPLIT_SETTING];
@@ -179,6 +181,25 @@ export default class PivotTable extends Component {
       widget: "input",
       getDefault: column => formatColumn(column),
     },
+    [COLUMN_SHOW_TOTALS]: {
+      hidden: true,
+      getValue: (column, columnSettings, { settings }) => {
+        const currentValue = columnSettings[COLUMN_SHOW_TOTALS];
+        const rows = settings[COLUMN_SPLIT_SETTING].rows || [];
+        // to show totals a column needs to be:
+        //  - in the left header ("rows" in COLUMN_SPLIT_SETTING)
+        //  - not the last column
+        const canHaveSubtotal = rows
+          .slice(0, rows.length - 1)
+          .some(row => _.isEqual(row, column.field_ref));
+        if (!canHaveSubtotal) {
+          // when this is null, the setting widget hides the toggle
+          return null;
+        }
+        return currentValue == null ? true : currentValue;
+      },
+    },
+    [COLUMN_SORT_ORDER]: { hidden: true },
   };
 
   setBodyRef = element => {
@@ -194,14 +215,23 @@ export default class PivotTable extends Component {
     return columnTitle || formatColumn(column);
   }
 
+  isColumnCollapsible(columnIndex) {
+    const { data, settings } = this.props;
+    const columns = data.cols.filter(col => !isPivotGroupColumn(col));
+    const { [COLUMN_SHOW_TOTALS]: showTotals } = settings.column(
+      columns[columnIndex],
+    );
+    return showTotals;
+  }
+
+  componentDidUpdate() {
+    // This is needed in case the cell counts didn't change, but the data did
+    this.leftHeaderRef && this.leftHeaderRef.recomputeCellSizesAndPositions();
+    this.topHeaderRef && this.topHeaderRef.recomputeCellSizesAndPositions();
+  }
+
   render() {
-    const {
-      settings,
-      data,
-      width,
-      height,
-      onUpdateVisualizationSettings,
-    } = this.props;
+    const { settings, data, width, onUpdateVisualizationSettings } = this.props;
     if (data == null || !data.cols.some(isPivotGroupColumn)) {
       return null;
     }
@@ -257,8 +287,8 @@ export default class PivotTable extends Component {
       return (
         <div
           key={key}
-          style={style}
-          className={cx("bg-light overflow-hidden", {
+          style={{ ...style, backgroundColor: PIVOT_BG_LIGHT }}
+          className={cx("overflow-hidden", {
             "border-right border-medium": !hasChildren,
           })}
         >
@@ -358,24 +388,21 @@ export default class PivotTable extends Component {
     );
 
     return (
-      <div className="no-outline text-small">
+      <div className="no-outline text-small full-height">
         <ScrollSync>
           {({ onScroll, scrollLeft, scrollTop }) => (
-            <div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `${leftHeaderWidth}px auto`,
-                }}
-              >
+            <div className="full-height flex flex-column">
+              <div className="flex" style={{ height: topHeaderHeight }}>
                 {/* top left corner - displays left header columns */}
                 <div
-                  className={cx("flex align-end bg-light", {
+                  className={cx("flex align-end", {
                     "border-right border-bottom border-medium": leftHeaderWidth,
                   })}
                   style={{
+                    backgroundColor: PIVOT_BG_LIGHT,
                     // add left spacing unless the header width is 0
                     paddingLeft: leftHeaderWidth && LEFT_HEADER_LEFT_SPACING,
+                    width: leftHeaderWidth,
                     height: topHeaderHeight,
                   }}
                 >
@@ -385,7 +412,8 @@ export default class PivotTable extends Component {
                       style={{ width: LEFT_HEADER_CELL_WIDTH }}
                       icon={
                         // you can only collapse before the last column
-                        index < rowIndexes.length - 1 && (
+                        index < rowIndexes.length - 1 &&
+                        this.isColumnCollapsible(rowIndex) && (
                           <RowToggleIcon
                             value={index + 1}
                             settings={settings}
@@ -398,6 +426,7 @@ export default class PivotTable extends Component {
                 </div>
                 {/* top header */}
                 <Collection
+                  ref={e => (this.topHeaderRef = e)}
                   className="scroll-hide-all text-medium"
                   width={width - leftHeaderWidth}
                   height={topHeaderHeight}
@@ -407,36 +436,51 @@ export default class PivotTable extends Component {
                   onScroll={({ scrollLeft }) => onScroll({ scrollLeft })}
                   scrollLeft={scrollLeft}
                 />
+              </div>
+              <div className="flex flex-full">
                 {/* left header */}
-                <Collection
-                  className="scroll-hide-all"
-                  cellCount={leftHeaderItems.length}
-                  cellRenderer={leftHeaderCellRenderer}
-                  cellSizeAndPositionGetter={
-                    leftHeaderCellSizeAndPositionGetter
-                  }
-                  width={leftHeaderWidth}
-                  height={height - topHeaderHeight - scrollBarOffsetSize()}
-                  scrollTop={scrollTop}
-                  onScroll={({ scrollTop }) => onScroll({ scrollTop })}
-                />
+                <div style={{ width: leftHeaderWidth }}>
+                  <AutoSizer disableWidth>
+                    {({ height }) => (
+                      <Collection
+                        ref={e => (this.leftHeaderRef = e)}
+                        className="scroll-hide-all"
+                        cellCount={leftHeaderItems.length}
+                        cellRenderer={leftHeaderCellRenderer}
+                        cellSizeAndPositionGetter={
+                          leftHeaderCellSizeAndPositionGetter
+                        }
+                        width={leftHeaderWidth}
+                        height={height - scrollBarOffsetSize()}
+                        scrollTop={scrollTop}
+                        onScroll={({ scrollTop }) => onScroll({ scrollTop })}
+                      />
+                    )}
+                  </AutoSizer>
+                </div>
                 {/* pivot table body */}
-                <Grid
-                  width={width - leftHeaderWidth}
-                  height={height - topHeaderHeight}
-                  className="text-dark"
-                  rowCount={rowCount}
-                  columnCount={columnCount}
-                  rowHeight={CELL_HEIGHT}
-                  columnWidth={valueIndexes.length * CELL_WIDTH}
-                  cellRenderer={bodyRenderer}
-                  onScroll={({ scrollLeft, scrollTop }) =>
-                    onScroll({ scrollLeft, scrollTop })
-                  }
-                  ref={this.setBodyRef}
-                  scrollTop={scrollTop}
-                  scrollLeft={scrollLeft}
-                />
+                <div>
+                  <AutoSizer disableWidth>
+                    {({ height }) => (
+                      <Grid
+                        width={width - leftHeaderWidth}
+                        height={height}
+                        className="text-dark"
+                        rowCount={rowCount}
+                        columnCount={columnCount}
+                        rowHeight={CELL_HEIGHT}
+                        columnWidth={valueIndexes.length * CELL_WIDTH}
+                        cellRenderer={bodyRenderer}
+                        onScroll={({ scrollLeft, scrollTop }) =>
+                          onScroll({ scrollLeft, scrollTop })
+                        }
+                        ref={this.setBodyRef}
+                        scrollTop={scrollTop}
+                        scrollLeft={scrollLeft}
+                      />
+                    )}
+                  </AutoSizer>
+                </div>
               </div>
             </div>
           )}
@@ -516,10 +560,13 @@ function RowToggleIcon({
   return (
     <div
       className={cx(
-        "flex align-center cursor-pointer bg-brand-hover text-light text-white-hover",
-        isCollapsed ? "bg-light" : "bg-medium",
+        "flex align-center cursor-pointer text-brand-hover text-light",
       )}
-      style={{ padding: "4px", borderRadius: "4px" }}
+      style={{
+        padding: "4px",
+        borderRadius: "4px",
+        backgroundColor: isCollapsed ? PIVOT_BG_LIGHT : PIVOT_BG_DARK,
+      }}
       onClick={e => {
         e.stopPropagation();
         updateSettings({
@@ -548,20 +595,20 @@ function Cell({
         lineHeight: `${CELL_HEIGHT}px`,
         ...(isGrandTotal ? { borderTop: "1px solid white" } : {}),
         ...style,
+        ...(isSubtotal ? { backgroundColor: PIVOT_BG_DARK } : {}),
       }}
-      className={cx("flex-full", className, {
-        "bg-medium text-bold": isSubtotal,
-        "cursor-pointer": onClick,
-      })}
+      className={cx(
+        "shrink-below-content-size flex-full flex-basis-none TableInteractive-cellWrapper",
+        className,
+        {
+          "text-bold": isSubtotal,
+          "cursor-pointer": onClick,
+        },
+      )}
       onClick={onClick}
     >
       <div className={cx("px1 flex align-center", { "justify-end": isBody })}>
-        {isBody ? (
-          // Ellipsified isn't really needed for body cells. Avoiding it helps performance.
-          value
-        ) : (
-          <Ellipsified>{value}</Ellipsified>
-        )}
+        <Ellipsified>{value}</Ellipsified>
         {icon && <div className="pl1">{icon}</div>}
       </div>
     </div>

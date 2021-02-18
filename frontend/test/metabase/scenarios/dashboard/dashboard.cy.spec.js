@@ -3,13 +3,22 @@
 import {
   popover,
   restore,
+  signIn,
   signInAsAdmin,
   selectDashboardFilter,
+  expectedRouteCalls,
 } from "__support__/cypress";
 
 import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
 
-const { ORDERS, ORDERS_ID, PRODUCTS, PEOPLE, PEOPLE_ID } = SAMPLE_DATASET;
+const {
+  ORDERS,
+  ORDERS_ID,
+  PRODUCTS,
+  PRODUCTS_ID,
+  PEOPLE,
+  PEOPLE_ID,
+} = SAMPLE_DATASET;
 
 function saveDashboard() {
   cy.findByText("Save").click();
@@ -266,6 +275,328 @@ describe("scenarios > dashboard", () => {
     });
   });
 
+  it("should display column options for cross-filter (metabase#14473)", () => {
+    cy.log("**-- 1. Create a question --**");
+
+    cy.request("POST", "/api/card", {
+      name: "14473",
+      dataset_query: {
+        type: "native",
+        native: { query: "SELECT COUNT(*) FROM PRODUCTS", "template-tags": {} },
+        database: 1,
+      },
+      display: "table",
+      visualization_settings: {},
+    }).then(({ body: { id: QUESTION_ID } }) => {
+      cy.log("**-- 2. Create a dashboard --**");
+
+      cy.request("POST", "/api/dashboard", {
+        name: "14473D",
+      }).then(({ body: { id: DASHBOARD_ID } }) => {
+        cy.log("**-- 3. Add 4 filters to the dashboard --**");
+
+        cy.request("PUT", `/api/dashboard/${DASHBOARD_ID}`, {
+          parameters: [
+            { name: "ID", slug: "id", id: "729b6456", type: "id" },
+            { name: "ID 1", slug: "id_1", id: "bb20f59e", type: "id" },
+            {
+              name: "Category",
+              slug: "category",
+              id: "89873480",
+              type: "category",
+            },
+            {
+              name: "Category 1",
+              slug: "category_1",
+              id: "cbc045f2",
+              type: "category",
+            },
+          ],
+        });
+
+        cy.log("**-- 4. Add previously created question to the dashboard --**");
+        cy.request("POST", `/api/dashboard/${DASHBOARD_ID}/cards`, {
+          cardId: QUESTION_ID,
+        });
+
+        cy.visit(`/dashboard/${DASHBOARD_ID}`);
+      });
+    });
+
+    // Add cross-filter click behavior manually
+    cy.get(".Icon-pencil").click();
+    cy.get(".DashCard .Icon-click").click({ force: true });
+    cy.findByText("COUNT(*)").click();
+    cy.findByText("Update a dashboard filter").click();
+
+    checkOptionsForFilter("ID");
+    checkOptionsForFilter("Category");
+  });
+
+  it.skip("should show QB question on a dashboard with filter connected to card without data-permission (metabase#12720)", () => {
+    // In this test we're using already present question ("Orders") and the dashboard with that question ("Orders in a dashboard")
+    cy.log(
+      "**-- 1. Add filter to the dashboard with the default value (after January 1st, 2020) --**",
+    );
+    cy.request("PUT", "/api/dashboard/1", {
+      parameters: [
+        {
+          default: "2020-01-01~",
+          id: "d3b78b27",
+          name: "Date Filter",
+          slug: "date_filter",
+          type: "date/all-options",
+        },
+      ],
+    });
+
+    cy.log("**-- 2. Create SQL question with a filter --**");
+
+    cy.request("POST", "/api/card", {
+      name: "12720_SQL",
+      dataset_query: {
+        type: "native",
+        native: {
+          query: "SELECT * FROM ORDERS WHERE {{filter}}",
+          "template-tags": {
+            filter: {
+              id: "1d006bb7-045f-6c57-e41b-2661a7648276",
+              name: "filter",
+              "display-name": "Filter",
+              type: "dimension",
+              dimension: ["field-id", ORDERS.CREATED_AT],
+              "widget-type": "date/month-year",
+              default: null,
+            },
+          },
+        },
+        database: 1,
+      },
+      display: "table",
+      visualization_settings: {},
+    }).then(({ body: { id: SQL_ID } }) => {
+      cy.log("**-- 3. Add SQL question to the dashboard --**");
+
+      cy.request("POST", "/api/dashboard/1/cards", {
+        cardId: SQL_ID,
+      }).then(({ body: { id: SQL_DASH_CARD_ID } }) => {
+        cy.log(
+          "**-- 4. Edit both cards (adjust their size and connect them to the filter) --**",
+        );
+
+        cy.request("PUT", "/api/dashboard/1/cards", {
+          cards: [
+            {
+              id: 1,
+              card_id: 1,
+              row: 0,
+              col: 0,
+              sizeX: 5,
+              sizeY: 5,
+              parameter_mappings: [
+                {
+                  parameter_id: "d3b78b27",
+                  card_id: 1,
+                  target: ["dimension", ["field-id", ORDERS.CREATED_AT]],
+                },
+              ],
+              visualization_settings: {},
+            },
+            {
+              id: SQL_DASH_CARD_ID,
+              card_id: SQL_ID,
+              row: 0,
+              col: 6, // previous card's sizeX + 1 (making sure they don't overlap)
+              sizeX: 5,
+              sizeY: 5,
+              parameter_mappings: [
+                {
+                  parameter_id: "d3b78b27",
+                  card_id: SQL_ID,
+                  target: ["dimension", ["template-tag", "filter"]],
+                },
+              ],
+              visualization_settings: {},
+            },
+          ],
+        });
+      });
+    });
+    cy.server();
+    cy.route("POST", "/api/card/*/query").as("cardQuery");
+
+    signIn("nodata");
+
+    clickThrough("12720_SQL");
+    clickThrough("Orders");
+
+    /**
+     * Helper function related to this test only
+     */
+    function clickThrough(title) {
+      cy.visit("/dashboard/1");
+      cy.wait("@cardQuery.all");
+      cy.get(".LegendItem")
+        .contains(title)
+        .click();
+      cy.findByText(/^January 17, 2020/);
+    }
+  });
+
+  it.skip("should cache filter results after the first DB call (metabase#13832)", () => {
+    // In this test we're using already present dashboard ("Orders in a dashboard")
+    const FILTER_ID = "d7988e02";
+
+    cy.log("**-- 1. Add filter to the dashboard --**");
+    cy.request("PUT", "/api/dashboard/1", {
+      parameters: [
+        {
+          id: FILTER_ID,
+          name: "Category",
+          slug: "category",
+          type: "category",
+        },
+      ],
+    });
+
+    cy.log("**-- 2. Connect filter to the existing card --**");
+    cy.request("PUT", "/api/dashboard/1/cards", {
+      cards: [
+        {
+          id: 1,
+          card_id: 1,
+          row: 0,
+          col: 0,
+          sizeX: 12,
+          sizeY: 8,
+          parameter_mappings: [
+            {
+              parameter_id: FILTER_ID,
+              card_id: 1,
+              target: [
+                "dimension",
+                [
+                  "fk->",
+                  ["field-id", ORDERS.PRODUCT_ID],
+                  ["field-id", PRODUCTS.CATEGORY],
+                ],
+              ],
+            },
+          ],
+          visualization_settings: {},
+        },
+      ],
+    });
+
+    cy.server();
+    cy.route(`/api/dashboard/1/params/${FILTER_ID}/values`).as("fetchFromDB");
+
+    cy.visit("/dashboard/1");
+
+    cy.get("fieldset")
+      .as("filterWidget")
+      .click();
+    expectedRouteCalls({ route_alias: "fetchFromDB", calls: 1 });
+
+    // Make sure all filters were fetched (should be cached after this)
+    ["Doohickey", "Gadget", "Gizmo", "Widget"].forEach(category => {
+      cy.findByText(category);
+    });
+
+    // Get rid of the popover
+    cy.findByText("Orders in a dashboard").click();
+
+    cy.log(
+      "**-- Clicking on the filter again should NOT send another query to the source DB again! Results should have been cached by now. --**",
+    );
+    cy.get("@filterWidget").click();
+    expectedRouteCalls({ route_alias: "fetchFromDB", calls: 1 });
+  });
+
+  it.skip("should not send additional card queries for all filters (metabase#13150)", () => {
+    cy.log("**-- 1. Create a question --**");
+
+    cy.request("POST", "/api/card", {
+      name: "13150 (Products)",
+      dataset_query: {
+        database: 1,
+        query: { "source-table": PRODUCTS_ID },
+        type: "query",
+      },
+      display: "table",
+      visualization_settings: {},
+    }).then(({ body: { id: QUESTION_ID } }) => {
+      cy.log("**-- 2. Create a dashboard --**");
+
+      cy.request("POST", "/api/dashboard", {
+        name: "13150D",
+      }).then(({ body: { id: DASHBOARD_ID } }) => {
+        cy.log("**-- 3. Add 3 filters to the dashboard --**");
+
+        cy.request("PUT", `/api/dashboard/${DASHBOARD_ID}`, {
+          parameters: [
+            { name: "Title", slug: "title", id: "9f20a0d5", type: "category" },
+            {
+              name: "Category",
+              slug: "category",
+              id: "719fe1c2",
+              type: "category",
+            },
+            { name: "Vendor", slug: "vendor", id: "a73b7c9", type: "category" },
+          ],
+        });
+
+        cy.log("**-- 4. Add previously created qeustion to the dashboard --**");
+
+        cy.request("POST", `/api/dashboard/${DASHBOARD_ID}/cards`, {
+          cardId: QUESTION_ID,
+        }).then(({ body: { id: DASH_CARD_ID } }) => {
+          cy.log("**-- 5. Connect all filters to the card --**");
+
+          cy.request("PUT", `/api/dashboard/${DASHBOARD_ID}/cards`, {
+            cards: [
+              {
+                id: DASH_CARD_ID,
+                card_id: QUESTION_ID,
+                row: 0,
+                col: 0,
+                sizeX: 14,
+                sizeY: 12,
+                parameter_mappings: [
+                  {
+                    parameter_id: "9f20a0d5",
+                    card_id: QUESTION_ID,
+                    target: ["dimension", ["field-id", PRODUCTS.TITLE]],
+                  },
+                  {
+                    parameter_id: "719fe1c2",
+                    card_id: QUESTION_ID,
+                    target: ["dimension", ["field-id", PRODUCTS.CATEGORY]],
+                  },
+                  {
+                    parameter_id: "a73b7c9",
+                    card_id: QUESTION_ID,
+                    target: ["dimension", ["field-id", PRODUCTS.VENDOR]],
+                  },
+                ],
+                visualization_settings: {},
+              },
+            ],
+          });
+          cy.server();
+          cy.route("POST", `/api/card/${QUESTION_ID}/query`).as("cardQuery");
+
+          cy.visit(
+            `/dashboard/${DASHBOARD_ID}?title=Awesome Concrete Shoes&category=Widget&vendor=McClure-Lockman`,
+          );
+
+          cy.wait("@cardQuery.all");
+          expectedRouteCalls({ route_alias: "cardQuery", calls: 1 });
+        });
+      });
+    });
+  });
+
   describe("revisions screen", () => {
     it("should open and close", () => {
       cy.visit("/dashboard/1");
@@ -294,4 +625,44 @@ describe("scenarios > dashboard", () => {
       cy.contains(/revert/i);
     });
   });
+
+  it("should show sub-day resolutions in relative date filter (metabase#6660)", () => {
+    cy.visit("/dashboard/1");
+    cy.get(".Icon-pencil").click();
+    cy.get(".Icon-filter").click();
+    popover().within(() => {
+      cy.findByText("Time").click();
+      cy.findByText("All Options").click();
+    });
+    cy.findByText("No default").click();
+    // click on Previous, to expand the relative date filter type dropdown
+    cy.findByText("Previous").click();
+    // choose Next, under which the new options should be available
+    cy.findByText("Next").click();
+    // click on Days (the default value), which should open the resolution dropdown
+    cy.findByText("Days").click();
+    // Hours should appear in the selection box (don't click it)
+    cy.findByText("Hours");
+    // Minutes should appear in the selection box; click it
+    cy.findByText("Minutes").click();
+    // also check the "Include this minute" checkbox
+    // which is actually "Include" followed by "this minute" wrapped in <strong>, so has to be clicked this way
+    cy.contains("Include this minute").click();
+    // make sure the checkbox was checked
+    cy.findByRole("checkbox").should("have.attr", "aria-checked", "true");
+  });
 });
+
+function checkOptionsForFilter(filter) {
+  cy.findByText("Available filters")
+    .parent()
+    .contains(filter)
+    .click();
+  popover()
+    .should("contain", "Columns")
+    .and("contain", "COUNT(*)")
+    .and("not.contain", "Dashboard filters");
+
+  // Get rid of the open popover to be able to select another filter
+  cy.findByText("Pick one or more filters to update").click();
+}

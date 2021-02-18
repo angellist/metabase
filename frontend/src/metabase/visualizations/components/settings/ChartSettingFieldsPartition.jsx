@@ -4,106 +4,117 @@ import { t } from "ttag";
 import { Flex } from "grid-styled";
 import { DragSource, DropTarget } from "react-dnd";
 import _ from "underscore";
-import colors, { lighten } from "metabase/lib/colors";
+import { assocIn } from "icepick";
 
+import styled from "styled-components";
+import colors, { lighten } from "metabase/lib/colors";
 import Icon from "metabase/components/Icon";
 import Label from "metabase/components/type/Label";
 import Grabber from "metabase/components/Grabber";
 import Text from "metabase/components/type/Text";
 import Toggle from "metabase/components/Toggle";
 
+import {
+  COLUMN_SHOW_TOTALS,
+  COLUMN_SORT_ORDER,
+  COLUMN_SORT_ORDER_ASC,
+  COLUMN_SORT_ORDER_DESC,
+} from "metabase/lib/data_grid";
 import { keyForColumn } from "metabase/lib/dataset";
 
-// eslint-disable-next-line no-unused-vars
-class ShowTotalsOption extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { showTotals: true };
+const DragWrapper = styled.div`
+  padding: 12px 14px;
+  box-shadow: 0 2px 3px ${lighten(colors["text-dark"], 1.5)};
+  &:hover {
+    box-shadow: 0 2px 5px ${lighten(colors["text-dark"], 1.3)};
+    transition: all 300ms linear;
   }
-  toggleTotals = () => {
-    const { showTotals } = this.state;
-    this.setState({ showTotals: !showTotals });
-    this.props.onChangeTotalsVisibility(!showTotals);
-  };
-  render() {
-    const { showTotals } = this.state;
-    return (
-      <Flex pt={2} justifyContent="space-between" alignItems="center">
-        <Text>{t`Show totals`}</Text>
-        <Toggle value={showTotals} onChange={this.toggleTotals}></Toggle>
-      </Flex>
-    );
+`;
+
+function ShowTotalsOption({ value, onChange }) {
+  if (value === null) {
+    return null;
   }
+  return (
+    <Flex pt={2} justifyContent="space-between" alignItems="center">
+      <Text>{t`Show totals`}</Text>
+      <Toggle value={value} onChange={() => onChange(!value)}></Toggle>
+    </Flex>
+  );
 }
 
-// eslint-disable-next-line no-unused-vars
-class SortIcon extends React.Component {
-  render() {
-    const { name, onClick } = this.props;
-    return (
-      <Icon
-        name={name}
-        onClick={onClick}
-        size={16}
-        className="sort cursor-pointer text-medium text-brand-hover"
-      />
-    );
-  }
+function SortButton({ iconName, onChange, currentValue, buttonValue }) {
+  const isSelected = buttonValue === currentValue;
+  return (
+    <Icon
+      name={iconName}
+      onClick={() => onChange(isSelected ? undefined : buttonValue)}
+      size={16}
+      className={cx("sort cursor-pointer", {
+        "text-brand": isSelected,
+        "text-medium text-brand-hover": !isSelected,
+      })}
+    />
+  );
 }
 
-// eslint-disable-next-line no-unused-vars
-class SortOrderOption extends React.Component {
-  handleSortUp = () => {
-    this.props.onChangeSortOrder("ascending");
-  };
-  handleSortDown = () => {
-    this.props.onChangeSortOrder("descending");
-  };
-  render() {
-    return (
-      <Flex pt={1} justifyContent="space-between" alignItems="center">
-        <Text>{t`Sort order`}</Text>
-        <div>
-          <SortIcon name="arrow_up" onClick={this.handleSortUp} />
-          <SortIcon name="arrow_down" onClick={this.handleSortDown} />
-        </div>
-      </Flex>
-    );
-  }
-}
-
-class FormattingOptions extends React.Component {
-  render() {
-    return (
-      <Flex pt={1} justifyContent="space-between" alignItems="center">
-        <Text>{t`Formatting`}</Text>
-        <Text
-          onClick={this.props.onEdit}
-          className="text-brand text-bold cursor-pointer"
-        >{t`See options…`}</Text>
-      </Flex>
-    );
-  }
-}
-
-class ColumnOptionsPanel extends React.Component {
-  render() {
-    // const { partitionName } = this.props;
-    return (
+function SortOrderOption({ value, onChange }) {
+  return (
+    <Flex pt={1} justifyContent="space-between" alignItems="center">
+      <Text>{t`Sort order`}</Text>
       <div>
-        {/* not yet implemented, but we're including the UI now for string translation
-           partitionName !== "values" && (
-          <div>
-            <ShowTotalsOption
-              onChangeTotalsVisibility={this.props.onChangeTotalsVisibility}
-            />
-            <SortOrderOption onChangeSortOrder={this.props.onChangeSortOrder} />
-          </div>
-        )*/}
-        <FormattingOptions onEdit={this.props.onEditFormatting} />
+        <SortButton
+          iconName="arrow_up"
+          onChange={onChange}
+          currentValue={value}
+          buttonValue={COLUMN_SORT_ORDER_ASC}
+        />
+        <SortButton
+          iconName="arrow_down"
+          onChange={onChange}
+          currentValue={value}
+          buttonValue={COLUMN_SORT_ORDER_DESC}
+        />
       </div>
-    );
-  }
+    </Flex>
+  );
+}
+
+function FormattingOptions({ onEdit }) {
+  return (
+    <Flex pt={1} justifyContent="space-between" alignItems="center">
+      <Text>{t`Formatting`}</Text>
+      <Text
+        onClick={onEdit}
+        className="text-brand text-bold cursor-pointer"
+      >{t`See options…`}</Text>
+    </Flex>
+  );
+}
+
+function ColumnOptionsPanel({
+  partitionName,
+  getColumnSettingValue,
+  onChangeColumnSetting,
+  onEditFormatting,
+}) {
+  return (
+    <div>
+      {partitionName !== "values" && (
+        <div>
+          <ShowTotalsOption
+            value={getColumnSettingValue(COLUMN_SHOW_TOTALS)}
+            onChange={onChangeColumnSetting.bind(null, COLUMN_SHOW_TOTALS)}
+          />
+          <SortOrderOption
+            value={getColumnSettingValue(COLUMN_SORT_ORDER)}
+            onChange={onChangeColumnSetting.bind(null, COLUMN_SORT_ORDER)}
+          />
+        </div>
+      )}
+      <FormattingOptions onEdit={onEditFormatting} />
+    </div>
+  );
 }
 
 class ChartSettingFieldsPartition extends React.Component {
@@ -112,15 +123,19 @@ class ChartSettingFieldsPartition extends React.Component {
     this.state = { displayedValue: null };
   }
 
-  handleChangeTotalsVisibility = (column, totalsVisibility) => {
-    const { onChangeTotalsVisibility } = this.props;
-    onChangeTotalsVisibility &&
-      onChangeTotalsVisibility(keyForColumn(column), totalsVisibility);
+  handleChangeColumnSetting = (column, settingName, value) => {
+    const { settings, onChangeSettings } = this.props;
+    const column_settings = assocIn(
+      settings.column_settings,
+      [keyForColumn(column), settingName],
+      value,
+    );
+    onChangeSettings({ column_settings });
   };
 
-  handleChangeSortOrder = (column, direction) => {
-    const { onChangeSortOrder } = this.props;
-    onChangeSortOrder && onChangeSortOrder(keyForColumn(column), direction);
+  getColumnSettingValue = (column, settingName) => {
+    const columnSettings = this.props.settings.column(column);
+    return columnSettings && columnSettings[settingName];
   };
 
   handleEditFormatting = column => {
@@ -167,8 +182,8 @@ class ChartSettingFieldsPartition extends React.Component {
             partitionName={name}
             columns={value[name]}
             value={value}
-            onChangeTotalsVisibility={this.handleChangeTotalsVisibility}
-            onChangeSortOrder={this.handleChangeSortOrder}
+            getColumnSettingValue={this.getColumnSettingValue}
+            onChangeColumnSetting={this.handleChangeColumnSetting}
             onEditFormatting={this.handleEditFormatting}
             updateDisplayedValue={this.updateDisplayedValue}
             commitDisplayedValue={this.commitDisplayedValue}
@@ -197,8 +212,8 @@ class Partition extends React.Component {
       columns = [],
       partitionName,
       columnFilter,
-      onChangeTotalsVisibility,
-      onChangeSortOrder,
+      onChangeColumnSetting,
+      getColumnSettingValue,
       onEditFormatting,
       updateDisplayedValue,
       commitDisplayedValue,
@@ -225,8 +240,8 @@ class Partition extends React.Component {
               index={index}
               columnFilter={columnFilter}
               value={value}
-              onChangeTotalsVisibility={onChangeTotalsVisibility}
-              onChangeSortOrder={onChangeSortOrder}
+              onChangeColumnSetting={onChangeColumnSetting}
+              getColumnSettingValue={getColumnSettingValue}
               onEditFormatting={onEditFormatting}
               updateDisplayedValue={updateDisplayedValue}
               commitDisplayedValue={commitDisplayedValue}
@@ -339,15 +354,6 @@ class Column extends React.Component {
     const { expanded } = this.state;
     this.setState({ expanded: !expanded });
   };
-  handleChangeTotalsVisibility = totalsVisibility => {
-    const { column, onChangeTotalsVisibility } = this.props;
-    onChangeTotalsVisibility &&
-      onChangeTotalsVisibility(column, totalsVisibility);
-  };
-  handleChangeSortOrder = direction => {
-    const { column, onChangeSortOrder } = this.props;
-    onChangeSortOrder && onChangeSortOrder(column, direction);
-  };
   handleEditFormatting = () => {
     const { column, onEditFormatting } = this.props;
     onEditFormatting && onEditFormatting(column);
@@ -359,50 +365,48 @@ class Column extends React.Component {
       connectDropTarget,
       isDragging,
       partitionName,
+      onChangeColumnSetting,
+      getColumnSettingValue,
     } = this.props;
     const { expanded } = this.state;
     const showOptionsPanel = expanded && !isDragging;
     return connectDropTarget(
       connectDragSource(
-        <div
-          className="mb1 bordered rounded"
-          style={{
-            padding: "12px 14px",
-            "box-shadow": `0 2px 3px ${lighten(colors["text-dark"], 1.5)}`,
-            "&:hover": {
-              "box-shadow": `0 2px 5px ${lighten(colors["text-dark"], 1.3)}`,
-              transition: "all 300ms linear",
-            },
-          }}
-        >
-          <div
+        <div>
+          <DragWrapper
             className={cx(
-              "text-dark text-bold cursor-grab flex justify-between",
+              "text-dark mb1 bordered rounded cursor-grab text-bold",
               { disabled: isDragging },
             )}
           >
-            <span
-              onClick={this.toggleExpand}
-              className="cursor-pointer text-brand-hover hover-parent hover--inherit"
+            <div
+              className={cx(
+                "text-dark text-bold cursor-grab flex justify-between",
+              )}
             >
-              {column.display_name}
-              <Icon
-                name={expanded ? "chevronup" : "chevrondown"}
-                size="10"
-                className="text-light hover-child hover--inherit ml1"
+              <span
+                onClick={this.toggleExpand}
+                className="cursor-pointer text-brand-hover hover-parent hover--inherit"
+              >
+                {column.display_name}
+                <Icon
+                  name={expanded ? "chevronup" : "chevrondown"}
+                  size="10"
+                  className="text-light hover-child hover--inherit ml1"
+                />
+              </span>
+              <Grabber style={{ width: 10 }} />
+            </div>
+            {showOptionsPanel && (
+              <ColumnOptionsPanel
+                className="text-medium"
+                partitionName={partitionName}
+                onChangeColumnSetting={onChangeColumnSetting.bind(null, column)}
+                getColumnSettingValue={getColumnSettingValue.bind(null, column)}
+                onEditFormatting={this.handleEditFormatting}
               />
-            </span>
-            <Grabber style={{ width: 10 }} />
-          </div>
-          {showOptionsPanel && (
-            <ColumnOptionsPanel
-              className="text-medium"
-              partitionName={partitionName}
-              onChangeTotalsVisibility={this.handleChangeTotalsVisibility}
-              onChangeSortOrder={this.handleChangeSortOrder}
-              onEditFormatting={this.handleEditFormatting}
-            />
-          )}
+            )}
+          </DragWrapper>
         </div>,
       ),
     );

@@ -7,15 +7,12 @@ FROM adoptopenjdk/openjdk8:nightly as builder
 
 WORKDIR /app/source
 
-ENV FC_LANG en-US
-ENV LC_CTYPE en_US.UTF-8
+ENV FC_LANG en-US LC_CTYPE en_US.UTF-8
 
 # bash:    various shell scripts
-# wget:    installing lein (TODO -- is this actually needed? We don't use wget directly)
 # curl:    needed by script that installs Clojure CLI
 # git:     ./bin/version
 # yarn:    frontend building
-# make:    backend building (TODO -- huh? We don't use Make to build the backend)
 # gettext: translations
 # java-cacerts: installs updated cacerts to /etc/ssl/certs/java/cacerts
 
@@ -26,14 +23,14 @@ RUN curl -sL https://deb.nodesource.com/setup_15.x | bash - \
       && npm install -g yarn
 
 # lein:    backend dependencies and building
-ADD https://raw.github.com/technomancy/leiningen/stable/bin/lein /usr/local/bin/lein
-RUN chmod 744 /usr/local/bin/lein
-RUN lein upgrade
+RUN curl https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein -o /usr/local/bin/lein && \
+  chmod +x /usr/local/bin/lein && \
+  /usr/local/bin/lein upgrade
 
 # Clojure CLI (needed for some build scripts)
-ADD https://download.clojure.org/install/linux-install-1.10.1.708.sh /tmp/linux-install-1.10.1.708.sh
-RUN chmod +x /tmp/linux-install-1.10.1.708.sh
-RUN /tmp/linux-install-1.10.1.708.sh
+RUN curl https://download.clojure.org/install/linux-install-1.10.1.708.sh -o /tmp/linux-install-1.10.1.708.sh && \
+  chmod +x /tmp/linux-install-1.10.1.708.sh && \
+  sh /tmp/linux-install-1.10.1.708.sh
 
 # install dependencies before adding the rest of the source to maximize caching
 
@@ -52,8 +49,8 @@ COPY . .
 RUN INTERACTIVE=false bin/build
 
 # import AWS RDS cert into /etc/ssl/certs/java/cacerts
-ADD https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem .
-RUN keytool -noprompt -import -trustcacerts -alias aws-rds \
+RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem -o rds-combined-ca-bundle.pem  && \
+  /opt/java/openjdk/bin/keytool -noprompt -import -trustcacerts -alias aws-rds \
   -file rds-combined-ca-bundle.pem \
   -keystore /etc/ssl/certs/java/cacerts \
   -keypass changeit -storepass changeit
@@ -66,8 +63,7 @@ FROM adoptopenjdk/openjdk11:jre-nightly as runner
 
 WORKDIR /app
 
-ENV FC_LANG en-US
-ENV LC_CTYPE en_US.UTF-8
+ENV FC_LANG en-US LC_CTYPE en_US.UTF-8
 
 # dependencies
 RUN apt-get update -yq && apt-get install -yq ttf-dejavu fontconfig
@@ -81,8 +77,7 @@ COPY --from=builder /app/source/target/uberjar/metabase.jar /app/target/uberjar/
 COPY --from=builder /app/source/bin/start /app/bin/
 
 # create the plugins directory, with writable permissions
-RUN mkdir -p /plugins
-RUN chmod a+rwx /plugins
+RUN mkdir -p /plugins && chmod a+rwx /plugins
 
 # expose our default runtime port
 EXPOSE 3000

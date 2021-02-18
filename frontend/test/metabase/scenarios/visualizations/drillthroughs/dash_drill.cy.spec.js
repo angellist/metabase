@@ -65,7 +65,7 @@ describe("scenarios > visualizations > drillthroughs > dash_drill", () => {
 
       it("should result in a correct query result", () => {
         cy.location("pathname").should("eq", `/question/${Q2.id}`);
-        cy.findByText("5,995");
+        cy.findByText("5,755");
       });
     });
 
@@ -126,7 +126,7 @@ describe("scenarios > visualizations > drillthroughs > dash_drill", () => {
     });
 
     describe("saved visualizations", () => {
-      it.skip("should respect visualization type when entering a question from a dashboard (metabase#13415)", () => {
+      it("should respect visualization type when entering a question from a dashboard (metabase#13415)", () => {
         const QUESTION_NAME = "13415";
 
         cy.log("**--1. Create a question--**");
@@ -215,9 +215,7 @@ describe("scenarios > visualizations > drillthroughs > dash_drill", () => {
 
             cy.wait("@dataset");
             cy.findByText("Category is Doohickey");
-            cy.get(".Visualization .ReactVirtualized__Grid").within(() => {
-              cy.findByText("177"); // Doohickeys for 2016
-            });
+            cy.findByText("177"); // Doohickeys for 2016
           });
         });
       });

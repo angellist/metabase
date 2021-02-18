@@ -10,6 +10,7 @@
             [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
             [metabase.driver.sql-jdbc.execute :as sql-jdbc.execute]
             [metabase.driver.sql-jdbc.execute.legacy-impl :as legacy]
+            [metabase.driver.sql-jdbc.sync :as sql-jdbc.sync]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.mbql.util :as mbql.u]
             [metabase.public-settings :as pubset]
@@ -17,7 +18,7 @@
             [metabase.query-processor.util :as qputil]
             [metabase.util.honeysql-extensions :as hx]
             [metabase.util.i18n :refer [trs]])
-  (:import [java.sql ResultSet Types]
+  (:import [java.sql Connection PreparedStatement ResultSet Types]
            java.time.OffsetTime))
 
 (driver/register! :redshift, :parent #{:postgres ::legacy/use-legacy-classes-for-read-and-set})
@@ -92,6 +93,18 @@
 ;;; |                                           metabase.driver.sql impls                                            |
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
+;; custom Redshift type handling
+
+(def ^:private database-type->base-type
+  (sql-jdbc.sync/pattern-based-database-type->base-type
+   [[#"(?i)CHARACTER VARYING" :type/Text]       ; Redshift uses CHARACTER VARYING (N) as a synonym for VARCHAR(N)
+    [#"(?i)NUMERIC"           :type/Decimal]])) ; and also has a NUMERIC(P,S) type, which is the same as DECIMAL(P,S)
+
+(defmethod sql-jdbc.sync/database-type->base-type :redshift
+  [driver column-type]
+  (or (database-type->base-type column-type)
+      ((get-method sql-jdbc.sync/database-type->base-type :postgres) driver column-type)))
+
 (defmethod sql.qp/add-interval-honeysql-form :redshift
   [_ hsql-form amount unit]
   (hsql/call :dateadd (hx/literal unit) amount (hx/->timestamp hsql-form)))
@@ -124,21 +137,50 @@
           (log/debug e (trs "Error setting default holdability for connection"))))
       conn
       (catch Throwable e
-        (.close conn)
+        (.close ^Connection conn)
         (throw e)))))
 
-(defn- splice-raw-string-value
-  [driver s]
-  (hsql/raw (str "'" (sql.qp/->honeysql driver s) "'")))
+(defn- prepare-statement [^Connection conn sql]
+  (.prepareStatement conn sql
+                     ResultSet/TYPE_FORWARD_ONLY
+                     ResultSet/CONCUR_READ_ONLY
+                     ResultSet/CLOSE_CURSORS_AT_COMMIT))
+
+(defn- quote-literal-for-connection
+  "Quotes a string literal so that it can be safely inserted into Redshift queries, by returning the result of invoking
+  the Redshift QUOTE_LITERAL function on the given string (which is set in a PreparedStatement as a parameter)."
+  [^Connection conn ^String s]
+  (with-open [stmt ^PreparedStatement (prepare-statement conn "SELECT QUOTE_LITERAL(?);")]
+    (.setString stmt 1 s)
+    (with-open [rs ^ResultSet (.executeQuery stmt)]
+      (when (.next rs)
+        (.getString rs 1)))))
+
+(defn- quote-literal-for-database
+  "This function invokes quote-literal-for-connection with a connection for the given database. See its docstring for
+  more detail."
+  [database s]
+  (let [jdbc-spec (sql-jdbc.conn/db->pooled-connection-spec database)]
+    (with-open [conn (jdbc/get-connection jdbc-spec)]
+      (quote-literal-for-connection conn s))))
 
 (defmethod sql.qp/->honeysql [:redshift :regex-match-first]
   [driver [_ arg pattern]]
-  (hsql/call :regexp_substr (sql.qp/->honeysql driver arg) (splice-raw-string-value driver pattern)))
+  (hsql/call
+    :regexp_substr
+    (sql.qp/->honeysql driver arg)
+    ;; the parameter to REGEXP_SUBSTR can only be a string literal; neither prepared statement parameters nor encoding/
+    ;; decoding functions seem to work (fails with java.sql.SQLExcecption: "The pattern must be a valid UTF-8 literal
+    ;; character expression"), hence we will use a different function to safely escape it before splicing here
+    (hsql/raw (quote-literal-for-database (qp.store/database) pattern))))
 
 (defmethod sql.qp/->honeysql [:redshift :replace]
   [driver [_ arg pattern replacement]]
-  (hsql/call :replace (sql.qp/->honeysql driver arg) (splice-raw-string-value driver pattern)
-             (splice-raw-string-value driver replacement)))
+  (hsql/call
+    :replace
+    (sql.qp/->honeysql driver arg)
+    (sql.qp/->honeysql driver pattern)
+    (sql.qp/->honeysql driver replacement)))
 
 (defmethod sql.qp/->honeysql [:redshift :concat]
   [driver [_ & args]]

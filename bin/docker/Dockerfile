@@ -1,7 +1,6 @@
 FROM adoptopenjdk/openjdk11:jre-nightly
 
-ENV FC_LANG en-US
-ENV LC_CTYPE en_US.UTF-8
+ENV FC_LANG en-US LC_CTYPE en_US.UTF-8
 
 # dependencies
 RUN apt-get update -yq && apt-get install -yq ttf-dejavu fontconfig
@@ -10,11 +9,10 @@ RUN apt-get update -yq && apt-get install -yq ttf-dejavu fontconfig
 COPY ./run_metabase.sh /app/
 
 # add Metabase jar
-COPY --from=metabase/metabase:v0.37.7 /app/metabase.jar /app/metabase.jar
+COPY --from=metabase/metabase:v0.38.0 /app/metabase.jar /app/metabase.jar
 
 # create the plugins directory, with writable permissions
-RUN mkdir -p /plugins
-RUN chmod a+rwx /plugins
+RUN mkdir -p /plugins && chmod a+rwx /plugins
 
 # expose our default runtime port
 EXPOSE 3000

@@ -4,6 +4,8 @@ import {
   openOrdersTable,
   version,
   popover,
+  itOpenSourceOnly,
+  setupDummySMTP,
 } from "__support__/cypress";
 
 describe("scenarios > admin > settings", () => {
@@ -12,14 +14,17 @@ describe("scenarios > admin > settings", () => {
     signInAsAdmin();
   });
 
-  it("should prompt admin to migrate to the hosted instance", () => {
-    cy.visit("/admin/settings/setup");
-    cy.findByText("Have your server maintained for you.");
-    cy.findByText("Migrate to Metabase Cloud.");
-    cy.findAllByRole("link", { name: "Learn more" })
-      .should("have.attr", "href")
-      .and("include", "/migrate/");
-  });
+  itOpenSourceOnly(
+    "should prompt admin to migrate to the hosted instance",
+    () => {
+      cy.visit("/admin/settings/setup");
+      cy.findByText("Have your server maintained for you.");
+      cy.findByText("Migrate to Metabase Cloud.");
+      cy.findAllByRole("link", { name: "Learn more" })
+        .should("have.attr", "href")
+        .and("include", "/migrate/");
+    },
+  );
 
   it("should surface an error when validation for any field fails (metabase#4506)", () => {
     const BASE_URL = Cypress.config().baseUrl;
@@ -36,15 +41,13 @@ describe("scenarios > admin > settings", () => {
       .type("foo", { delay: 100 })
       .blur();
 
-    cy.wait("@url")
-      .wait("@url") // cy.wait("@url.2") doesn't work for some reason
-      .should(xhr => {
-        expect(xhr.status).to.eq(500);
-        // Switching to regex match for assertions - the test was flaky because of the "typing" issue
-        // i.e. it sometimes doesn't type the whole string "foo", but only "oo".
-        // We only care that the `cause` is starting with "Invalid site URL"
-        expect(xhr.response.body.cause).to.match(/^Invalid site URL/);
-      });
+    cy.wait("@url").should(xhr => {
+      expect(xhr.status).to.eq(500);
+      // Switching to regex match for assertions - the test was flaky because of the "typing" issue
+      // i.e. it sometimes doesn't type the whole string "foo", but only "oo".
+      // We only care that the `cause` is starting with "Invalid site URL"
+      expect(xhr.response.body.cause).to.match(/^Invalid site URL/);
+    });
 
     // NOTE: This test is not concerned with HOW we style the error message - only that there is one.
     //       If we update UI in the future (for example: we show an error within a popup/modal), the test in current form could fail.
@@ -325,6 +328,7 @@ describe("scenarios > admin > settings", () => {
       cy.findByText("Send test email").click();
       cy.findByText("Sorry, something went wrong. Please try again.");
     });
+
     it("should be able to clear email settings", () => {
       cy.visit("/admin/settings/email");
       cy.findByText("Clear").click();
@@ -334,6 +338,16 @@ describe("scenarios > admin > settings", () => {
         "have.value",
         "",
       );
+    });
+
+    it.skip("should not offer to save email changes when there aren't any (metabase#14749)", () => {
+      // Make sure some settings are already there
+      setupDummySMTP();
+
+      cy.visit("/admin/settings/email");
+      cy.findByText("Send test email").scrollIntoView();
+      // Needed to scroll the page down first to be able to use findByRole() - it fails otherwise
+      cy.findByRole("button", { name: "Save changes" }).should("be.disabled");
     });
   });
 

@@ -10,9 +10,12 @@ export function isPivotGroupColumn(col) {
 
 export const COLLAPSED_ROWS_SETTING = "pivot_table.collapsed_rows";
 export const COLUMN_SPLIT_SETTING = "pivot_table.column_split";
+export const COLUMN_SHOW_TOTALS = "pivot_table.column_show_totals";
+export const COLUMN_SORT_ORDER = "pivot_table.column_sort_order";
+export const COLUMN_SORT_ORDER_ASC = "ascending";
+export const COLUMN_SORT_ORDER_DESC = "descending";
 
 export function multiLevelPivot(data, settings) {
-  const collapsedSubtotals = settings[COLLAPSED_ROWS_SETTING].value;
   const columnSplit = settings[COLUMN_SPLIT_SETTING];
   if (columnSplit == null) {
     return null;
@@ -21,7 +24,11 @@ export function multiLevelPivot(data, settings) {
     col => !isPivotGroupColumn(col),
   );
 
-  const { rows, columns, values } = _.mapObject(columnSplit, columnFieldRefs =>
+  const {
+    columns: columnColumnIndexes,
+    rows: rowColumnIndexes,
+    values: valueColumnIndexes,
+  } = _.mapObject(columnSplit, columnFieldRefs =>
     columnFieldRefs
       .map(field_ref =>
         columnsWithoutPivotGroup.findIndex(col =>
@@ -30,30 +37,18 @@ export function multiLevelPivot(data, settings) {
       )
       .filter(index => index !== -1),
   );
-  return multiLevelPivotForIndexes(
-    data,
-    columns,
-    rows,
-    values,
-    collapsedSubtotals,
-    settings,
-  );
-}
 
-// TODO: this only exists for unit testing convenience.
-// Instead we should add helpers in the tests so we can use the real function.
-export function multiLevelPivotForIndexes(
-  data,
-  columnColumnIndexes,
-  rowColumnIndexes,
-  valueColumnIndexes,
-  collapsedSubtotals = [],
-  settings,
-) {
   const { pivotData, columns } = splitPivotData(
     data,
     rowColumnIndexes,
     columnColumnIndexes,
+  );
+
+  const columnSettings = columns.map(column => settings.column(column));
+  const allCollapsedSubtotals = settings[COLLAPSED_ROWS_SETTING].value;
+  const collapsedSubtotals = filterCollapsedSubtotals(
+    allCollapsedSubtotals,
+    rowColumnIndexes.map(index => columnSettings[index]),
   );
 
   // we build a tree for each tuple of pivoted column/row values seen in the data
@@ -69,8 +64,19 @@ export function multiLevelPivotForIndexes(
   );
   for (const row of pivotData[primaryRowsKey]) {
     // mutate the trees to add the tuple from the current row
-    updateValueObject(row, columnColumnIndexes, columnColumnTree);
-    updateValueObject(row, rowColumnIndexes, rowColumnTree, collapsedSubtotals);
+    updateValueObject(
+      row,
+      columnColumnIndexes,
+      columnSettings,
+      columnColumnTree,
+    );
+    updateValueObject(
+      row,
+      rowColumnIndexes,
+      columnSettings,
+      rowColumnTree,
+      collapsedSubtotals,
+    );
 
     // save the value columns keyed by the values in the column/row pivoted columns
     const valueKey = JSON.stringify(
@@ -110,7 +116,7 @@ export function multiLevelPivotForIndexes(
   ].map(indexes =>
     indexes.map(index =>
       _.memoize(
-        value => formatValue(value, settings.column(columns[index])),
+        value => formatValue(value, columnSettings[index]),
         value => [value, index].join(),
       ),
     ),
@@ -147,9 +153,13 @@ export function multiLevelPivotForIndexes(
     leftIndexFormatters,
     leftIndexColumns,
   );
+  const showSubtotalsByColumn = rowColumnIndexes.map(
+    index => getIn(columnSettings, [index, COLUMN_SHOW_TOTALS]) !== false,
+  );
   const formattedRowTree = addSubtotals(
     formattedRowTreeWithoutSubtotals,
     leftIndexFormatters,
+    showSubtotalsByColumn,
   );
   if (formattedRowTreeWithoutSubtotals.length > 1) {
     // if there are multiple columns, we should add another for row totals
@@ -220,6 +230,21 @@ function splitPivotData(data, rowIndexes, columnIndexes) {
 function addEmptyIndexItem(index) {
   // we need a single item even if all columns are on the other axis
   return index.length === 0 ? [[]] : index;
+}
+
+// A path can't be collapsed if subtotals are turned off for that column.
+// TODO: can we move this to the COLLAPSED_ROW_SETTING itself?
+function filterCollapsedSubtotals(collapsedSubtotals, columnSettings) {
+  const columnIsCollapsible = columnSettings.map(
+    settings => settings[COLUMN_SHOW_TOTALS] !== false,
+  );
+  return collapsedSubtotals.filter(pathOrLengthString => {
+    const pathOrLength = JSON.parse(pathOrLengthString);
+    const length = Array.isArray(pathOrLength)
+      ? pathOrLength.length
+      : pathOrLength;
+    return columnIsCollapsible[length - 1];
+  });
 }
 
 // The getter returned from this function returns the value(s) at given (column, row) location
@@ -328,12 +353,18 @@ function addValueColumnNodes(nodes, valueColumns) {
 
 // This inserts nodes into the left header tree for subtotals.
 // We also mark nodes with `hasSubtotal` to display collapsing UI
-function addSubtotals(rowColumnTree, formatters) {
-  return rowColumnTree.flatMap(item => addSubtotal(item, formatters));
+function addSubtotals(rowColumnTree, formatters, showSubtotalsByColumn) {
+  return rowColumnTree.flatMap(item =>
+    addSubtotal(item, formatters, showSubtotalsByColumn),
+  );
 }
 
-function addSubtotal(item, [formatter, ...formatters]) {
-  const hasSubtotal = item.children.length > 1;
+function addSubtotal(
+  item,
+  [formatter, ...formatters],
+  [isSubtotalEnabled, ...showSubtotalsByColumn],
+) {
+  const hasSubtotal = item.children.length > 1 && isSubtotalEnabled;
   const subtotal = hasSubtotal
     ? [
         {
@@ -353,7 +384,9 @@ function addSubtotal(item, [formatter, ...formatters]) {
     hasSubtotal,
     children: item.children.flatMap(item =>
       // add subtotals until the last level
-      item.children.length > 0 ? addSubtotal(item, formatters) : item,
+      item.children.length > 0
+        ? addSubtotal(item, formatters, showSubtotalsByColumn)
+        : item,
     ),
   };
 
@@ -361,10 +394,17 @@ function addSubtotal(item, [formatter, ...formatters]) {
 }
 
 // Update the tree with a row of data
-function updateValueObject(row, indexes, seenValues, collapsedSubtotals = []) {
+function updateValueObject(
+  row,
+  indexes,
+  columnSettings,
+  seenValues,
+  collapsedSubtotals = [],
+) {
   let currentLevelSeenValues = seenValues;
   const prefix = [];
-  for (const value of indexes.map(index => row[index])) {
+  for (const index of indexes) {
+    const value = row[index];
     prefix.push(value);
     let seenValue = currentLevelSeenValues.find(d => d.value === value);
     const isCollapsed =
@@ -375,9 +415,34 @@ function updateValueObject(row, indexes, seenValues, collapsedSubtotals = []) {
     if (seenValue === undefined) {
       seenValue = { value, children: [], isCollapsed };
       currentLevelSeenValues.push(seenValue);
+      sortLevelOfTree(currentLevelSeenValues, columnSettings[index]);
     }
     currentLevelSeenValues = seenValue.children;
   }
+}
+
+// Sorts the array of nodes in place if a sort order is set for that column
+function sortLevelOfTree(array, { [COLUMN_SORT_ORDER]: sortOrder } = {}) {
+  if (sortOrder == null) {
+    // don't sort unless there's a column sort order set
+    return;
+  }
+  array.sort((a, b) => {
+    if (a.value === b.value) {
+      return 0;
+    }
+    // by default use "<" to compare values
+    let result = a.value < b.value ? -1 : 1;
+    // strings should use localeCompare to handle accents, etc
+    if (typeof a.value === "string") {
+      result = a.value.localeCompare(b.value);
+    }
+    // flip the comparison for descending
+    if (sortOrder === COLUMN_SORT_ORDER_DESC) {
+      result *= -1;
+    }
+    return result;
+  });
 }
 
 // Take a tree and produce a flat list used to layout the top/left headers.

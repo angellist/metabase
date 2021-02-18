@@ -7,7 +7,7 @@ import {
 } from "__support__/cypress";
 import { SAMPLE_DATASET } from "__support__/cypress_sample_dataset";
 
-const { ORDERS, ORDERS_ID, PRODUCTS, PEOPLE } = SAMPLE_DATASET;
+const { ORDERS, ORDERS_ID, PRODUCTS, PRODUCTS_ID, PEOPLE } = SAMPLE_DATASET;
 
 const QUESTION_NAME = "Cypress Pivot Table";
 const DASHBOARD_NAME = "Pivot Table Dashboard";
@@ -81,7 +81,7 @@ describe("scenarios > visualizations > pivot tables", () => {
     cy.findByText("Source is Affiliate");
     cy.findByText("Category is Doohickey");
     // data loads
-    cy.findByText("45.08");
+    cy.findByText("45.04");
   });
 
   it("should allow drill through on left/top header values", () => {
@@ -220,6 +220,103 @@ describe("scenarios > visualizations > pivot tables", () => {
     cy.findByText("294").should("not.exist"); // the other one is still hidden
   });
 
+  it("should allow hiding subtotals", () => {
+    visitQuestionAdhoc({
+      dataset_query: testQuery,
+      display: "pivot",
+      visualization_settings: {
+        "pivot_table.column_split": {
+          rows: testQuery.query.breakout,
+          columns: [],
+          values: [],
+        },
+      },
+    });
+
+    cy.findByText(/Count by Users? → Source and Products? → Category/); // ad-hoc title
+
+    cy.findByText("3,520"); // check for one of the subtotals
+
+    // open settings
+    cy.findByText("Settings").click();
+    assertOnPivotSettings();
+
+    // Confirm that Product -> Category doesn't have the option to hide subtotals
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .findByText(/Product → Category/)
+      .click();
+    cy.findByText("Show totals").should("not.exist");
+
+    // turn off subtotals for User -> Source
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .findByText(/Users? → Source/)
+      .click();
+    cy.findByText("Show totals")
+      .parent()
+      .find("a")
+      .click();
+
+    cy.findByText("3,520").should("not.exist"); // the subtotal has disappeared!
+  });
+
+  it("should uncollapse a value when hiding the subtotals", () => {
+    const rows = testQuery.query.breakout;
+    visitQuestionAdhoc({
+      dataset_query: testQuery,
+      display: "pivot",
+      visualization_settings: {
+        "pivot_table.column_split": { rows, columns: [], values: [] },
+        "pivot_table.collapsed_rows": { value: ['["Affiliate"]'], rows },
+      },
+    });
+
+    cy.findByText("899").should("not.exist"); // confirm that "Affiliate" is collapsed
+    cy.findByText("3,520"); // affiliate subtotal is visible
+
+    // open settings
+    cy.findByText("Settings").click();
+
+    // turn off subtotals for User -> Source
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .findByText(/Users? → Source/)
+      .click();
+    cy.findByText("Show totals")
+      .parent()
+      .find("a")
+      .click();
+
+    cy.findByText("3,520").should("not.exist"); // the subtotal isn't there
+    cy.findByText("899"); // Affiliate is no longer collapsed
+  });
+
+  it("should expand and collapse field options", () => {
+    visitQuestionAdhoc({ dataset_query: testQuery, display: "pivot" });
+
+    cy.findByText(/Count by Users? → Source and Products? → Category/); // ad-hoc title
+
+    cy.findByText("Settings").click();
+    assertOnPivotSettings();
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .findByText(/Users? → Source/)
+      .click();
+
+    cy.log("**-- Collapse the options panel --**");
+    cy.get(".Icon-chevronup").click();
+    cy.findByText(/Formatting/).should("not.exist");
+    cy.findByText(/See options/).should("not.exist");
+
+    cy.log("**-- Expand it again --**");
+    cy.get(".Icon-chevrondown")
+      .first()
+      .click();
+    cy.findByText(/Formatting/);
+    cy.findByText(/See options/);
+  });
+
   it("should allow column formatting", () => {
     visitQuestionAdhoc({ dataset_query: testQuery, display: "pivot" });
 
@@ -276,6 +373,60 @@ describe("scenarios > visualizations > pivot tables", () => {
     });
   });
 
+  it("should not allow sorting of value fields", () => {
+    visitQuestionAdhoc({ dataset_query: testQuery, display: "pivot" });
+
+    cy.findByText(/Count by Users? → Source and Products? → Category/); // ad-hoc title
+
+    cy.findByText("Settings").click();
+    assertOnPivotSettings();
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .parent()
+      .findAllByText(/Count/)
+      .click();
+
+    cy.findByText(/Formatting/);
+    cy.findByText(/Sort order/).should("not.exist");
+  });
+
+  it("should allow sorting fields", () => {
+    // Pivot by a single column with many values (100 bins).
+    // Having many values hides values that are sorted to the end.
+    // This lets us assert on presence of a certain value.
+    visitQuestionAdhoc({
+      dataset_query: {
+        type: "query",
+        query: {
+          "source-table": ORDERS_ID,
+          aggregation: [["count"]],
+          breakout: [
+            ["binning-strategy", ["field-id", ORDERS.TOTAL], "num-bins", 100],
+          ],
+        },
+        database: 1,
+      },
+      display: "pivot",
+    });
+
+    // open settings and expand Total column settings
+    cy.findByText("Settings").click();
+    cy.findAllByText("Fields to use for the table")
+      .parent()
+      .findByText(/Total/)
+      .click();
+
+    // sort descending
+    cy.get(".Icon-arrow_down").click();
+    cy.findByText("158 – 160");
+    cy.findByText("8 – 10").should("not.exist");
+
+    // sort ascending
+    cy.get(".Icon-arrow_up").click();
+    cy.findByText("8 – 10");
+    cy.findByText("158 – 160").should("not.exist");
+  });
+
   it("should display an error message for native queries", () => {
     cy.server();
     // native queries should use the normal dataset endpoint even when set to pivot
@@ -293,6 +444,66 @@ describe("scenarios > visualizations > pivot tables", () => {
 
     cy.wait("@dataset");
     cy.findByText("Pivot tables can only be used with aggregated queries.");
+  });
+
+  describe("custom columns (metabase#14604)", () => {
+    it("should work with custom columns as values", () => {
+      visitQuestionAdhoc({
+        dataset_query: {
+          database: 1,
+          query: {
+            "source-table": ORDERS_ID,
+            expressions: {
+              "Twice Total": ["*", ["field-id", ORDERS.TOTAL], 2],
+            },
+            aggregation: [
+              ["sum", ["field-id", ORDERS.TOTAL]],
+              ["sum", ["expression", "Twice Total"]],
+            ],
+            breakout: [
+              ["datetime-field", ["field-id", ORDERS.CREATED_AT], "year"],
+            ],
+          },
+          type: "query",
+        },
+        display: "pivot",
+      });
+
+      // value headings
+      cy.findByText("Sum of Total");
+      cy.findByText("Sum of Twice Total");
+
+      // check values in the table
+      cy.findByText("42,156.87"); // sum of total for 2016
+      cy.findByText("84,313.74"); // sum of "twice total" for 2016
+
+      // check grand totals
+      cy.findByText("1,510,621.68"); // sum of total grand total
+      cy.findByText("3,021,243.37"); // sum of "twice total" grand total
+    });
+
+    it("should work with custom columns as pivoted columns", () => {
+      visitQuestionAdhoc({
+        dataset_query: {
+          type: "query",
+          query: {
+            "source-table": PRODUCTS_ID,
+            expressions: {
+              category_foo: ["concat", ["field-id", PRODUCTS.CATEGORY], "foo"],
+            },
+            aggregation: [["count"]],
+            breakout: [["expression", "category_foo"]],
+          },
+          database: 1,
+        },
+        display: "pivot",
+      });
+
+      cy.findByText("category_foo");
+      cy.findByText("Doohickeyfoo");
+      cy.findByText("42"); // count of Doohickeyfoo
+      cy.findByText("200"); // grand total
+    });
   });
 
   describe("dashboards", () => {
@@ -334,6 +545,16 @@ describe("scenarios > visualizations > pivot tables", () => {
 
     it("should display a pivot table on a dashboard (metabase#14465)", () => {
       assertOnPivotFields();
+    });
+
+    it("should allow filtering drill through (metabase#14632)", () => {
+      assertOnPivotFields();
+      cy.findByText("Google").click(); // open actions menu
+      popover().within(() => cy.findByText("=").click()); // drill with additional filter
+      cy.findByText("Source is Google"); // filter was added
+      cy.findByText("Row totals"); // it's still a pivot table
+      cy.findByText("1,027"); // primary data value
+      cy.findByText("3,798"); // subtotal value
     });
   });
 
@@ -409,7 +630,7 @@ describe("scenarios > visualizations > pivot tables", () => {
             .then($value => {
               cy.visit($value);
             });
-          cy.findAllByText(test.subject); // the inspector only saw one, but findByText failed due to multiple elements
+          cy.get(".EmbedFrame-header").contains(test.subject);
           assertOnPivotFields();
         });
 
@@ -431,12 +652,18 @@ describe("scenarios > visualizations > pivot tables", () => {
           // visit the iframe src directly to ensure it's not sing preview endpoints
           cy.get("iframe").then($iframe => {
             cy.visit($iframe[0].src);
-            cy.findByText(test.subject);
+            cy.get(".EmbedFrame-header").contains(test.subject);
             assertOnPivotFields();
           });
         });
       });
     });
+  });
+
+  it("should open the download popover (metabase#14750)", () => {
+    createAndVisitTestQuestion();
+    cy.get(".Icon-download").click();
+    popover().within(() => cy.findByText("Download full results"));
   });
 });
 

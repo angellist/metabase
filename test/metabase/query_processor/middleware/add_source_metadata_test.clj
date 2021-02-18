@@ -2,8 +2,10 @@
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
             [metabase.driver :as driver]
+            [metabase.query-processor :as qp]
             [metabase.query-processor.middleware.add-source-metadata :as add-source-metadata]
-            [metabase.test :as mt]))
+            [metabase.test :as mt]
+            [metabase.util :as u]))
 
 (defn- add-source-metadata [query]
   (driver/with-driver :h2
@@ -12,7 +14,9 @@
 
 (defn- results-metadata [query-results]
   (for [col (-> query-results :data :cols)]
-    (select-keys col [:id :table_id :name :display_name :base_type :special_type :unit :fingerprint :settings])))
+    (select-keys
+     col
+     [:id :table_id :name :display_name :base_type :special_type :unit :fingerprint :settings :field_ref :parent_id])))
 
 (defn- venues-source-metadata
   ([]
@@ -24,22 +28,6 @@
      (results-metadata
       (mt/run-mbql-query venues {:fields (for [id field-ids] [:field-id id])
                                  :limit  1})))))
-
-(defn- metadata-from-source-query
-  "`:fingerprint` and `:settings` are not usually included in `:source-metadata` if it is pulled up from a nested source
-  query, so this function can be used with one of the functions above to remove those keys if applicable.
-
-  TODO - I'm not convinced that behavior makes sense? Maybe we should change it and remove this function. "
-  [ms]
-  {:pre [(sequential? ms) (every? map? ms)]}
-  (for [m ms]
-    (reduce
-     (fn [m k]
-       (if (nil? (get m k))
-         (dissoc m k)
-         m))
-     m
-     [:fingerprint :settings])))
 
 (defn- venues-source-metadata-for-field-literals
   "Metadata we'd expect to see from a `:field-literal` clause. The same as normal metadata, but field literals don't
@@ -75,7 +63,11 @@
                                 :breakout     [$price]}
               :source-metadata (concat
                                 (venues-source-metadata :price)
-                                (results-metadata (mt/run-mbql-query venues {:aggregation [[:count]]})))})
+                                [{:name         "count"
+                                  :display_name "Count"
+                                  :base_type    :type/BigInteger
+                                  :special_type :type/Number
+                                  :field_ref    [:aggregation 0]}])})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-table $$venues
@@ -93,7 +85,8 @@
                                   :display_name "Average of ID"
                                   :base_type    :type/BigInteger
                                   :special_type :type/PK
-                                  :settings     nil}])})
+                                  :settings     nil
+                                  :field_ref    [:aggregation 0]}])})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-table $$venues
@@ -118,7 +111,8 @@
                                     :display_name "My Cool Ag"
                                     :base_type    :type/BigInteger
                                     :special_type :type/PK
-                                    :settings     nil}])})
+                                    :settings     nil
+                                    :field_ref    [:aggregation 0]}])})
              (add-source-metadata
               (mt/mbql-query venues
                 {:source-query {:source-table $$venues
@@ -132,7 +126,8 @@
                :display_name "Average of ID"
                :base_type    :type/BigInteger
                :special_type :type/PK
-               :settings     nil}]
+               :settings     nil
+               :field_ref    [:aggregation 0]}]
              (source-metadata
               (add-source-metadata
                (mt/mbql-query venues
@@ -144,7 +139,8 @@
                :display_name "My Cool Ag"
                :base_type    :type/BigInteger
                :special_type :type/PK
-               :settings     nil}]
+               :settings     nil
+               :field_ref    [:aggregation 0]}]
              (source-metadata
               (add-source-metadata
                (mt/mbql-query venues
@@ -158,7 +154,7 @@
              {:source-query    {:source-query    {:source-table $$venues
                                                   :fields       [$id $name]}
                                 :source-metadata (venues-source-metadata :id :name)}
-              :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))})
+              :source-metadata (venues-source-metadata :id :name)})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-query    {:source-table $$venues
@@ -170,8 +166,8 @@
              {:source-query    {:source-query    {:source-query    {:source-table $$venues
                                                                     :fields       [$id $name]}
                                                   :source-metadata (venues-source-metadata :id :name)}
-                                :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))}
-              :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))})
+                                :source-metadata (venues-source-metadata :id :name)}
+              :source-metadata (venues-source-metadata :id :name)})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query
@@ -184,8 +180,8 @@
     (is (= (mt/mbql-query venues
              {:source-query    {:source-query    {:source-query    {:source-table $$venues}
                                                   :source-metadata (venues-source-metadata)}
-                                :source-metadata (metadata-from-source-query (venues-source-metadata))}
-              :source-metadata (metadata-from-source-query (venues-source-metadata))})
+                                :source-metadata (venues-source-metadata)}
+              :source-metadata (venues-source-metadata)})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-query {:source-query {:source-table $$venues}}}})))))
@@ -195,8 +191,8 @@
              {:source-query    {:source-query    {:source-query    {:source-table $$venues
                                                                     :fields       [$id $name]}
                                                   :source-metadata (venues-source-metadata :id :name)}
-                                :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))}
-              :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))})
+                                :source-metadata (venues-source-metadata :id :name)}
+              :source-metadata (venues-source-metadata :id :name)})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-query {:source-query {:source-table $$venues
@@ -211,8 +207,8 @@
                                                                       :aggregation  [[:count]]
                                                                       :breakout     [$price]}
                                                     :source-metadata metadata}
-                                  :source-metadata (metadata-from-source-query metadata)}
-                :source-metadata (metadata-from-source-query metadata)}))
+                                  :source-metadata metadata}
+                :source-metadata metadata}))
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-query {:source-query {:source-table $$venues
@@ -223,7 +219,7 @@
     (is (= (mt/mbql-query venues
              {:source-query    {:source-query    {:native "SELECT \"ID\", \"NAME\" FROM \"VENUES\";"}
                                 :source-metadata (venues-source-metadata :id :name)}
-              :source-metadata (metadata-from-source-query (venues-source-metadata :id :name))})
+              :source-metadata (venues-source-metadata :id :name)})
            (add-source-metadata
             (mt/mbql-query venues
               {:source-query {:source-query    {:native "SELECT \"ID\", \"NAME\" FROM \"VENUES\";"}
@@ -250,7 +246,16 @@
                                   :aggregation  [[:count]]
                                   :breakout     [[:binning-strategy $latitude :default]]}
                 :source-metadata (concat
-                                  (venues-source-metadata :latitude)
+                                  (let [[lat-col] (venues-source-metadata :latitude)]
+                                    [(assoc lat-col :field_ref (mt/$ids venues
+                                                                 [:binning-strategy
+                                                                  $latitude
+                                                                  :bin-width
+                                                                  5.0
+                                                                  {:min-value 10.0
+                                                                   :max-value 45.0
+                                                                   :num-bins  7
+                                                                   :bin-width 5.0}]))])
                                   (results-metadata (mt/run-mbql-query venues {:aggregation [[:count]]})))})
              (add-source-metadata
               (mt/mbql-query venues
@@ -277,3 +282,75 @@
                     :limit        2}))]
       (is (= ["ID" "DATE" "USER_ID" "VENUE_ID" "ID_2" "NAME" "LAST_LOGIN"]
              (map :name (get-in query [:query :source-metadata])))))))
+
+(deftest inception-test
+  (testing "Should be able to do an 'inception-style' nesting of source > source > source with a join (#14724)"
+    (mt/dataset sample-dataset
+      ;; these tests look at the metadata for just one column so it's easier to spot the differences.
+      (letfn [(ean-metadata [query]
+                (as-> query query
+                  (get-in query [:query :source-metadata])
+                  (u/key-by :name query)
+                  (get query "EAN")
+                  (select-keys query [:name :display_name :base_type :special_type :id :field_ref])))]
+        (let [base-query (mt/mbql-query orders
+                           {:source-table $$orders
+                            :joins        [{:fields       :all
+                                            :source-table $$products
+                                            :condition    [:= $product_id [:joined-field "Products" $products.id]]
+                                            :alias        "Products"}]
+                            :limit        10})]
+          (testing "Make sure metadata is correct for the 'EAN' column with"
+            (doseq [level (range 1 4)
+                    :let  [query (mt/nest-query base-query level)]]
+              (testing (format "%d level(s) of nesting" level)
+                (is (= (mt/$ids products
+                         {:name         "EAN"
+                          :display_name "Products → Ean"
+                          :base_type    :type/Text
+                          :special_type nil
+                          :id           %ean
+                          :field_ref    [:joined-field "Products" $ean]})
+                       (ean-metadata (add-source-metadata query))))))))))))
+
+(deftest ignore-legacy-source-metadata-test
+  (testing "Should ignore 'legacy' < 0.38.0 source metadata and recalculate it for MBQL queries (#14788)"
+    ;; normally this middleware will use existing source metadata rather than recalculating it, but if we encounter <
+    ;; 0.38.0 source metadata that is missing `:field_ref` and `:id` information we should ignore it.
+    (mt/dataset sample-dataset
+      (let [query             (mt/mbql-query orders
+                                {:source-query {:source-table $$orders
+                                                :joins        [{:source-table $$products
+                                                                :alias         "ℙ"
+                                                                :fields       :all
+                                                                :condition    [:= $product_id &ℙ.products.id]}]
+                                                :order-by     [[:asc $id]]
+                                                :limit        2}})
+            metadata          (qp/query->expected-cols query)
+            ;; the actual metadata this middleware should return. Doesn't have all the columns that come back from
+            ;; `qp/query->expected-cols`
+            expected-metadata (for [col metadata]
+                                (cond-> (dissoc col :description :source :visibility_type)
+                                  ;; for some reason this middleware returns temporal fields with field refs wrapped
+                                  ;; in `:datetime-field` clauses with `:default` unit, whereas `query->expected-cols`
+                                  ;; does not wrap the field refs. It ulimately makes zero difference, so I haven't
+                                  ;; looked into why this is the case yet.
+                                  (isa? (:base_type col) :type/Temporal)
+                                  (update :field_ref (fn [field-ref]
+                                                       [:datetime-field field-ref :default]))))]
+        (letfn [(added-metadata [query]
+                  (get-in (add-source-metadata query) [:query :source-metadata]))]
+          (testing "\nShould add source metadata if there's none already"
+            (is (= expected-metadata
+                   (added-metadata query))))
+          (testing "\nShould use existing metadata if it's already there"
+            ;; since it's using the existing metadata, it should have all the extra keys instead of the subset in
+            ;; `expected-metadata`
+            (is (= metadata
+                   (added-metadata (assoc-in query [:query :source-metadata] metadata)))))
+          (testing "\nShould ignore legacy metadata"
+            ;; pre-0.38.0 metadata didn't have `field_ref` or `id.`
+            (let [legacy-metadata (for [col metadata]
+                                    (dissoc col :field_ref :id))]
+              (is (= expected-metadata
+                     (added-metadata (assoc-in query [:query :source-metadata] legacy-metadata)))))))))))

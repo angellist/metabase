@@ -222,6 +222,10 @@ export const describeWithToken = Cypress.env("HAS_ENTERPRISE_TOKEN")
   ? describe
   : describe.skip;
 
+export const itOpenSourceOnly = Cypress.env("HAS_ENTERPRISE_TOKEN")
+  ? it.skip
+  : it;
+
 // TODO: does this really need to be a global helper function?
 export function createBasicAlert({ firstAlert, includeNormal } = {}) {
   cy.get(".Icon-bell").click();
@@ -250,6 +254,27 @@ export function setupDummySMTP() {
     "email-smtp-username": "nevermind",
     "email-smtp-password": "it-is-secret-NOT",
     "email-from-address": "nonexisting@metabase.test",
+  });
+}
+
+export function expectedRouteCalls({ route_alias, calls } = {}) {
+  const requestsCount = alias =>
+    cy.state("requests").filter(req => req.alias === alias);
+  // It is hard and unreliable to assert that something didn't happen in Cypress
+  // This solution was the only one that worked out of all others proposed in this SO topic: https://stackoverflow.com/a/59302542/8815185
+  cy.get("@" + route_alias).then(() => {
+    expect(requestsCount(route_alias)).to.have.length(calls);
+  });
+}
+
+export function remapDisplayValueToFK({ display_value, name, fk } = {}) {
+  // Both display_value and fk are expected to be field IDs
+  // You can get them from frontend/test/__support__/cypress_sample_dataset.json
+  cy.request("POST", `/api/field/${display_value}/dimension`, {
+    field_id: display_value,
+    name,
+    human_readable_field_id: fk,
+    type: "external",
   });
 }
 

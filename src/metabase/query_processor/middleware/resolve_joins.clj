@@ -2,7 +2,9 @@
   "Middleware that fetches tables that will need to be joined, referred to by `fk->` clauses, and adds information to
   the query about what joins should be done and how they should be performed."
   (:refer-clojure :exclude [alias])
-  (:require [metabase.mbql.schema :as mbql.s]
+  (:require [clojure.data :as data]
+            [clojure.tools.logging :as log]
+            [metabase.mbql.schema :as mbql.s]
             [metabase.mbql.util :as mbql.u]
             [metabase.query-processor.middleware.add-implicit-clauses :as add-implicit-clauses]
             [metabase.query-processor.store :as qp.store]
@@ -62,9 +64,11 @@
 (defn- source-metadata->fields [{:keys [alias], :as join} source-metadata]
   (when-not (seq source-metadata)
     (throw (ex-info (tru "Cannot use :fields :all in join against source query unless it has :source-metadata.")
-             {:join join})))
-  (for [{field-name :name, base-type :base_type} source-metadata]
-    [:joined-field alias [:field-literal field-name base-type]]))
+                    {:join join})))
+  (for [{field-name :name, base-type :base_type, field-id :id} source-metadata]
+    [:joined-field alias (if field-id
+                           [:field-id field-id]
+                           [:field-literal field-name base-type])]))
 
 (s/defn ^:private handle-all-fields :- mbql.s/Join
   "Replace `:fields :all` in a join with an appropriate list of Fields."
@@ -128,22 +132,11 @@
     (cond-> inner-query
       (seq join-fields) (update :fields (comp vec distinct concat) join-fields))))
 
-(defn- check-join-aliases [{:keys [joins], :as query}]
-  (let [aliases (set (map :alias joins))]
-    (doseq [alias (mbql.u/match query [:joined-field alias _] alias)]
-      (when-not (aliases alias)
-        (throw
-         (IllegalArgumentException.
-           (tru "Bad :joined-field clause: join with alias ''{0}'' does not exist. Found: {1}"
-                alias aliases)))))))
-
 (s/defn ^:private resolve-joins-in-mbql-query :- ResolvedMBQLQuery
   [{:keys [joins], :as query} :- mbql.s/MBQLQuery]
-  (u/prog1 (-> query
-               (update :joins resolve-references-and-deduplicate)
-               (update :joins resolve-join-source-queries)
-               merge-joins-fields)
-    (check-join-aliases (dissoc <> :source-query))))
+  (-> query
+      (update :joins (comp resolve-join-source-queries resolve-references-and-deduplicate))
+      merge-joins-fields))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -178,4 +171,8 @@
   "Add any Tables and Fields referenced by the `:joins` clause to the QP store."
   [qp]
   (fn [query rff context]
-    (qp (resolve-joins* query) rff context)))
+    (let [query' (resolve-joins* query)]
+      (when-not (= query query')
+        (let [[before after] (data/diff query query')]
+          (log/tracef "Resolved joins: %s -> %s" (u/pprint-to-str 'yellow before) (u/pprint-to-str 'cyan after))))
+      (qp query' rff context))))
