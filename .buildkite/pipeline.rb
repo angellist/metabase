@@ -1,4 +1,3 @@
-require 'json'
 require 'buildkite_utils'
 
 NAME = :metabase
@@ -8,6 +7,6 @@ STEPS = []
   STEPS << BuildkiteUtils.build_step(name: NAME, target: :test, arch: arch)
 end
 
-STEPS << BuildkiteUtils.deploy_manifest_step(name: NAME, target: :test)
+# STEPS << BuildkiteUtils.deploy_manifest_step(name: NAME, target: :test)
 
 puts JSON.dump(steps: STEPS)
