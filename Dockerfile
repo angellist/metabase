@@ -28,9 +28,9 @@ RUN curl https://raw.githubusercontent.com/technomancy/leiningen/stable/bin/lein
   /usr/local/bin/lein upgrade
 
 # Clojure CLI (needed for some build scripts)
-RUN curl https://download.clojure.org/install/linux-install-1.10.1.708.sh -o /tmp/linux-install-1.10.1.708.sh && \
+RUN curl https://download.clojure.org/install/linux-install-1.10.1.708.sh > /tmp/linux-install-1.10.1.708.sh && \
   chmod +x /tmp/linux-install-1.10.1.708.sh && \
-  sh /tmp/linux-install-1.10.1.708.sh
+  /tmp/linux-install-1.10.1.708.sh
 
 # install dependencies before adding the rest of the source to maximize caching
 
