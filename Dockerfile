@@ -59,7 +59,7 @@ RUN curl https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem -o rd
 # # STAGE 2: runner
 # ###################
 
-FROM adoptopenjdk/openjdk11:jre-nightly as runner
+FROM adoptopenjdk/openjdk11:jre-nightly as production
 
 WORKDIR /app
 
