@@ -4,7 +4,7 @@ NAME = :metabase
 STEPS = []
 
 ["amd64", "arm64"].each do |arch|
-  STEPS << BuildkiteUtils.build_step(name: NAME, target: :production, arch: arch)
+  STEPS << BuildkiteUtils.build_step(name: NAME, target: :production, context: 'bin/docker', arch: arch)
 end
 
 STEPS << BuildkiteUtils.deploy_manifest_step(name: NAME, target: :production) if BuildkiteUtils::WILL_DEPLOY

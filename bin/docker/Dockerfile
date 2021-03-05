@@ -1,4 +1,4 @@
-FROM adoptopenjdk/openjdk11:jre-nightly
+FROM adoptopenjdk/openjdk11:jre-nightly as production
 
 ENV FC_LANG en-US
 ENV LC_CTYPE en_US.UTF-8
