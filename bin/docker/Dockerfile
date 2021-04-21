@@ -10,7 +10,7 @@ RUN apt-get update -yq && apt-get install -yq ttf-dejavu fontconfig
 COPY ./run_metabase.sh /app/
 
 # add Metabase jar
-COPY --from=metabase/metabase:v0.38.1 /app/metabase.jar /app/metabase.jar
+COPY --from=metabase/metabase:v0.39.0 /app/metabase.jar /app/metabase.jar
 
 # create the plugins directory, with writable permissions
 RUN mkdir -p /plugins
